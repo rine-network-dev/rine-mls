@@ -1,0 +1,5 @@
+# pyo3's build-config probe leaves an empty object file behind. Build junk, and
+# the kind of stray artifact that ends up in an sdist if nothing ignores it.
+*.o
+*.so
+*.whl

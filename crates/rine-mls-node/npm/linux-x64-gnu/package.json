@@ -1,0 +1,27 @@
+{
+  "name": "@rine-network/mls-linux-x64-gnu",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "rine-mls.linux-x64-gnu.node",
+  "files": [
+    "rine-mls.linux-x64-gnu.node"
+  ],
+  "description": "rine's MLS group core (RFC 9420) with the X-Wing post-quantum ciphersuite",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">= 20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://codeberg.org/rine/rine-src.git",
+    "directory": "rine-mls/crates/rine-mls-node"
+  },
+  "os": [
+    "linux"
+  ],
+  "libc": [
+    "glibc"
+  ]
+}

@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = ["crates/rine-mls-core", "crates/rine-mls-node", "crates/rine-mls-py"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://codeberg.org/rine/rine-src"
+publish = false
+
+# Crypto and MLS dependencies are exact-pinned: a silent minor bump
+# on the E2EE path is a wire-compatibility and security event, not a refresh.
+[workspace.dependencies]
+mls-rs = { version = "=0.55.2", default-features = false, features = ["std", "rfc_compliant", "tree_index", "fast_serialize"] }
+mls-rs-core = { version = "=0.27.0", default-features = false, features = ["std"] }
+mls-rs-codec = { version = "=0.7.0", default-features = false, features = ["std"] }
+mls-rs-crypto-rustcrypto = { version = "=0.22.0", default-features = false, features = ["std"] }
+mls-rs-crypto-hpke = { version = "=0.21.0", default-features = false, features = ["std"] }
+mls-rs-crypto-traits = { version = "=0.22.0", default-features = false, features = ["std"] }
+ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["alloc"] }
+zeroize = { version = "=1.9.0", default-features = false, features = ["alloc"] }
+thiserror = "2"
+hex = "0.4.3"
+
+# X-Wing (X25519 + ML-KEM-768) parts. libcrux is the formally verified,
+# portable-plus-SIMD ML-KEM and SHA-3 implementation; x25519-dalek is the same
+# X25519 the classical suite already runs on. None of these is native-only, so
+# the crate keeps building for every target in the release matrix and wasm32.
+libcrux-ml-kem = { version = "=0.0.10", default-features = false, features = ["mlkem768"] }
+libcrux-sha3 = { version = "=0.0.10", default-features = false }
+x25519-dalek = { version = "=2.0.1", default-features = false, features = ["alloc", "static_secrets"] }
+rand_core = { version = "=0.6.4", default-features = false, features = ["getrandom"] }
+
+# FFI toolkits. Exact-pinned like everything else: these generate the ABI glue
+# between rine's MLS state and two host runtimes, so a silent bump is a
+# memory-safety surface, not a refresh.
+napi = { version = "=3.11.0", default-features = false, features = ["napi8"] }
+napi-derive = { version = "=3.6.0", default-features = false }
+napi-build = "=2.3.2"
+pyo3 = { version = "=0.29.0", default-features = false, features = ["macros", "extension-module", "abi3-py39"] }

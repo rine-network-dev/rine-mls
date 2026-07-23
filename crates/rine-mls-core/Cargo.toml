@@ -1,0 +1,39 @@
+[package]
+name = "rine-mls-core"
+description = "rine's MLS group contract over mls-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+mls-rs.workspace = true
+mls-rs-core.workspace = true
+mls-rs-codec.workspace = true
+mls-rs-crypto-rustcrypto.workspace = true
+mls-rs-crypto-hpke.workspace = true
+mls-rs-crypto-traits.workspace = true
+ed25519-dalek.workspace = true
+zeroize.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+libcrux-ml-kem.workspace = true
+libcrux-sha3.workspace = true
+x25519-dalek.workspace = true
+rand_core.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+# Already dependencies of the crate; repeated here so the integration tests can
+# drive the provider through the same traits mls-rs drives it through, and can
+# compare rine's classical suite against the one mls-rs ships.
+mls-rs.workspace = true
+mls-rs-core.workspace = true
+mls-rs-crypto-rustcrypto.workspace = true
+
+# Second, independent X-Wing implementation, used only to cross-check ours byte
+# for byte. It never ships: if the two disagree, ours is presumed wrong.
+x-wing = { version = "=0.1.0", features = ["hazmat"] }

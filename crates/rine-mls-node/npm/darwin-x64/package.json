@@ -1,0 +1,24 @@
+{
+  "name": "@rine-network/mls-darwin-x64",
+  "version": "0.1.0",
+  "cpu": [
+    "x64"
+  ],
+  "main": "rine-mls.darwin-x64.node",
+  "files": [
+    "rine-mls.darwin-x64.node"
+  ],
+  "description": "rine's MLS group core (RFC 9420) with the X-Wing post-quantum ciphersuite",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">= 20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://codeberg.org/rine/rine-src.git",
+    "directory": "rine-mls/crates/rine-mls-node"
+  },
+  "os": [
+    "darwin"
+  ]
+}

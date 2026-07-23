@@ -1,0 +1,35 @@
+[package]
+name = "rine-mls-node"
+description = "napi-rs binding for rine's MLS core (npm @rine-network/mls)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+# The addon is exercised from JavaScript, which is the only place its error
+# mapping and handle lifetimes are observable. A Rust test harness would link a
+# cdylib with no Node runtime behind it.
+test = false
+doctest = false
+
+[features]
+# Adds `panicProbe()` to both handles: a method that panics on purpose, so the
+# firewall can be proven end to end from JavaScript rather than only by a Rust
+# unit test. Off by default and never enabled for a published artifact — the
+# npm package test asserts the method is absent from what ships.
+panic-probe = []
+
+[dependencies]
+rine-mls-core = { path = "../rine-mls-core" }
+napi = { workspace = true }
+# `type-def` is what emits the `.d.ts` intermediates `napi build` turns into the
+# package's `index.d.ts`. Without it the addon still builds and still works, but
+# the npm package ships no types at all — silently, with only a warning.
+napi-derive = { workspace = true, features = ["type-def"] }
+
+[build-dependencies]
+napi-build = { workspace = true }

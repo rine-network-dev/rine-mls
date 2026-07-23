@@ -1,0 +1,33 @@
+# Known-answer tests for rine's post-quantum ciphersuite 0xF057 as a whole.
+#
+# Every expected value below was computed OUTSIDE this crate, in Python, from
+# the primitive the suite claims to use — SHA-256, HMAC-SHA-256, HKDF-SHA-256,
+# ChaCha20-Poly1305 — so the fixture is an independent statement about what the
+# suite must be, not a recording of what it currently does. If a dependency bump
+# swapped a primitive, or the suite were rebuilt on different parameters, these
+# stop matching.
+#
+# kem_derive_sk is the decapsulation key HPKE's DeriveKeyPair produces for
+# kdf_ikm, i.e. SHAKE-256(HKDF-Extract("", "HPKE-v1" || "KEM" || F057 ||
+# "dkp_prk" || ikm), 32). It pins the KEM id into the key schedule: change the
+# id and the derived key changes. The matching encapsulation key is not stored
+# here because the seed-to-key function is already pinned by the draft's own
+# vectors in xwing-draft06.txt.
+
+vector rine-suite-f057
+hash_input 72696e65206369706865727375697465206b6e6f776e20616e73776572
+hash 493dca78be2f9f06e2b05a6117407b511b1c5da8224f5a903418f0f422ac6dcf
+mac_key 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+mac 4156c272c20d97524b6c216dcebc6036a4a3c61538d1f34ef61732d005c0fb97
+kdf_salt 72696e652d73616c74
+kdf_ikm 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+kdf_prk d461fa316a25828c7c9925023250c2208e32d1195fa272decd65102fa07b19af
+kdf_info 72696e652d696e666f
+kdf_expand_64 a83e09d36b9f7083acf1c85262d28baf391e0ae99ec2ffc5280f3dadf53b33a8ed0fdeb57f59e7fe88118eb2115d137e0ddf05417dd323443cd61da6b079d922
+aead_key 000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f
+aead_nonce 000102030405060708090a0b
+aead_aad 72696e652d616164
+aead_plaintext 706f73742d7175616e74756d2067726f7570206d657373616765
+aead_ciphertext f9947b740466d021d9f74a9eb87a7c0cbc00928a3407ded881f26579fdad48d2ef5310c56c4eb99e5c3d
+kem_derive_ikm 202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f
+kem_derive_sk 68ba60bf61013190c8bc64ae09abcb3bbe964dcb6aec2687e658d2106dbea99a

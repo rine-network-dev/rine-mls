@@ -1,0 +1,37 @@
+[build-system]
+requires = ["maturin>=1.9,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "rine-mls"
+description = "rine's MLS group core (RFC 9420) with the X-Wing post-quantum ciphersuite"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://codeberg.org/rine/rine-src"
+
+[tool.maturin]
+module-name = "rine_mls"
+# One abi3 wheel per platform covers every CPython from 3.9 up, which is what
+# keeps the build matrix to platforms rather than platforms x versions.
+#
+# `maturin build --features X` REPLACES this list rather than adding to it, so
+# any command that opts a feature in must spell `pyo3/extension-module` out
+# alongside it — `tests/run.sh` does.
+features = ["pyo3/extension-module"]
+# PyO3 generates no stubs, so `rine_mls.pyi` beside this file is written by hand.
+# maturin picks it up by name and ships it as `rine_mls/__init__.pyi` with a
+# `py.typed` marker — no `include` entry needed, and adding one would publish a
+# second copy. `tests/test_stub.py` keeps the stub honest.
+
+[tool.pytest.ini_options]
+# Declared so the crate's own tests root here rather than inheriting the
+# backend's pytest configuration from the repository root.
+testpaths = ["tests"]

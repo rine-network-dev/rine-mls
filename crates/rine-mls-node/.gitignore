@@ -1,0 +1,5 @@
+node_modules/
+# Prebuilt addons: built per platform by `npm run build`, staged into npm/<platform>/
+# by `napi artifacts`, and published from there. Never committed.
+*.node
+*.tgz

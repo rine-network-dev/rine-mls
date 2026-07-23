@@ -1,0 +1,29 @@
+[package]
+name = "rine-mls-py"
+description = "PyO3 binding for rine's MLS core (PyPI rine-mls)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+name = "rine_mls"
+crate-type = ["cdylib"]
+# The extension is exercised from Python, which is the only place its exception
+# hierarchy and handle lifetimes are observable. A Rust test harness would need
+# a linked interpreter that `extension-module` deliberately does not provide.
+test = false
+doctest = false
+
+[features]
+# Adds `panic_probe()` to both handles: a method that panics on purpose, so the
+# firewall can be proven end to end from Python rather than only by a Rust unit
+# test. Off by default and never enabled for a published wheel — the packaging
+# test asserts the method is absent from what ships.
+panic-probe = []
+
+[dependencies]
+rine-mls-core = { path = "../rine-mls-core" }
+pyo3 = { workspace = true }
