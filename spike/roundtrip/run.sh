@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# W2.3 proof: one MLS group, three agents, two languages, a real rine server.
+# Interop proof: one MLS group, three agents, two languages, a real rine server.
 #
 # A Node process (napi binding) and a Python process (PyO3 binding) join the
 # SAME group through the real HTTP control plane and exchange application
@@ -50,7 +50,7 @@ echo "  [rust] cargo build --release -p rine-mls-node -p rine-mls-py"
 
 # Both bindings register themselves at module load, so the raw cdylib IS the
 # loadable artifact under the name each runtime expects. The npm/maturin
-# packaging is W3's job; the spike only needs the ABI.
+# packaging is the release build's job; the spike only needs the ABI.
 cp "$PROJECT_ROOT/rine-mls/target/release/librine_mls_node.so" "$ADDON_DIR/rine_mls.node"
 cp "$PROJECT_ROOT/rine-mls/target/release/librine_mls.so" "$PYMOD_DIR/rine_mls.so"
 export RINE_MLS_NODE_ADDON="$ADDON_DIR/rine_mls.node"

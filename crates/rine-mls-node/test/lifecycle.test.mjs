@@ -166,4 +166,110 @@ test("test_constants_when_read_from_the_addon_match_the_cores_policy", () => {
   assert.ok(mls.KEY_PACKAGE_LOW_WATER < mls.KEY_PACKAGE_TARGET);
   assert.ok(mls.KEY_PACKAGE_TARGET <= mls.KEY_PACKAGE_MAX_BATCH);
   assert.ok(mls.SELF_READ_MAX_ENTRIES > 0 && mls.SELF_READ_MAX_BYTES > 0);
+  assert.ok(
+    mls.EPOCH_RETENTION_DEFAULT >= mls.MESSAGE_RETENTION_DAYS,
+    "the epoch window is the server's retention in epochs, so at least a day of it",
+  );
+});
+
+// The tree-query and recovery surface the clients are built on: enumerate
+// the ratchet tree, learn this handle's own leaf, and rejoin on it.
+for (const [suiteName, suite] of SUITES) {
+  test(`test_tree_enumeration_and_resync_when_driven_from_javascript_${suiteName}_hold`, () => {
+    const root = workspace();
+    const alice = agent(root, "alice", suite);
+    const bob = agent(root, "bob", suite);
+    const carol = agent(root, "carol", suite);
+
+    const aliceClient = alice.open();
+    const bobClient = bob.open();
+    const carolClient = carol.open();
+
+    const gid = groupId();
+    const aliceGroup = aliceClient.createGroupWithMembers(gid, [
+      bobClient.generateKeyPackage(),
+      carolClient.generateKeyPackage(),
+    ]);
+    const init = aliceGroup.lastCommit();
+    const bobGroup = bobClient.joinFromWelcome(init.welcomes[0]);
+    const carolGroup = carolClient.joinFromWelcome(init.welcomes[1]);
+
+    // --- the tree is enumerable, and every index round-trips ---------------
+    const tree = aliceGroup.memberIdentities();
+    assert.equal(tree.length, 3, "every occupied leaf is reported, once");
+
+    for (const { index, identity } of tree) {
+      assert.equal(
+        aliceGroup.memberIndex(identity),
+        index,
+        "an enumerated leaf must be the leaf the identity-keyed lookup names",
+      );
+    }
+
+    const seated = tree.map((m) => Buffer.from(m.identity).toString("hex")).sort();
+    const expected = [aliceClient, bobClient, carolClient]
+      .map((c) => Buffer.from(c.publicKey()).toString("hex"))
+      .sort();
+    assert.deepEqual(seated, expected, "the identities are the members' public keys");
+
+    for (const [group, client] of [
+      [aliceGroup, aliceClient],
+      [bobGroup, bobClient],
+    ]) {
+      assert.equal(
+        group.currentMemberIndex(),
+        group.memberIndex(client.publicKey()),
+        "a handle must agree with itself about which leaf it occupies",
+      );
+    }
+
+    // --- recovery: the plain join is refused, the resync is not ------------
+    const staleLeaf = bobGroup.currentMemberIndex();
+
+    assert.equal(
+      codeOf(() => bobClient.joinByExternalCommit(aliceGroup.groupInfo())),
+      "RINE_MLS_PROTOCOL",
+      "a seated agent cannot take a second leaf, so the plain join is not a resync",
+    );
+
+    const resynced = bobClient.resyncByExternalCommit(aliceGroup.groupInfo(), staleLeaf);
+    const commit = resynced.lastCommit();
+
+    assert.equal(commit.welcomes.length, 0, "a resync admits nobody");
+    assert.equal(aliceGroup.applyCommit(commit.commit), 2);
+    assert.equal(carolGroup.applyCommit(commit.commit), 2, "a bystander applies it too");
+
+    const after = resynced.memberIdentities();
+    const bobLeaves = after.filter(
+      (m) => Buffer.compare(Buffer.from(m.identity), Buffer.from(bobClient.publicKey())) === 0,
+    );
+
+    assert.equal(after.length, tree.length, "a resync does not change the membership count");
+    assert.deepEqual(
+      bobLeaves.map((m) => m.index),
+      [resynced.currentMemberIndex()],
+      "the stale leaf is replaced, not doubled",
+    );
+
+    const hello = aliceGroup.encryptApplicationMessage(envelope("welcome back"));
+    assert.equal(text(resynced.decryptApplicationMessage(hello).envelope), "welcome back");
+  });
+}
+
+// Both ends of the one seam every binding passes epoch retention through: an
+// unset limit is the shipped window, and zero is refused rather than silently
+// accepted.
+test("test_epoch_retention_when_configured_takes_the_shipped_window_or_refuses", () => {
+  const root = workspace();
+
+  assert.doesNotThrow(() =>
+    agent(root, "unset", mls.CIPHER_SUITE_DEFAULT).open().createGroup(groupId()),
+  );
+  assert.doesNotThrow(() =>
+    agent(root, "tuned", mls.CIPHER_SUITE_DEFAULT, { epochRetentionLimit: 2 }).open(),
+  );
+  assert.equal(
+    codeOf(() => agent(root, "broken", mls.CIPHER_SUITE_DEFAULT, { epochRetentionLimit: 0 }).open()),
+    "RINE_MLS_INVALID_EPOCH_RETENTION",
+  );
 });

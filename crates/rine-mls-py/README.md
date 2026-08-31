@@ -13,9 +13,6 @@ One abi3 wheel per platform covers every CPython from 3.9 up, so no compiler is
 needed at install time. Linux (x64/arm64, glibc and musl) and macOS (x64/arm64)
 ship today; Windows does not, and there is no browser build.
 
-Of those six wheels, Linux x64 (glibc) on CPython 3.12 is what the test suite
-runs. The other five are cross-built and not executed.
-
 ## Using it
 
 ```python
@@ -80,9 +77,11 @@ next key package in the peer's pool cannot help and only empties it.
 
 ## Epoch retention
 
-By default every past epoch secret is kept, so a member returning after any
-number of commits still decrypts the backlog queued for it. Epochs advance on
-membership changes, not on messages, so this stays small.
+Past epoch secrets are kept for `EPOCH_RETENTION_DEFAULT` epochs, which is the
+rine server's 90-day message retention converted into epochs at the churn rate
+of the largest group rine serves. A member returning inside that window still
+decrypts the backlog queued for it. Epochs advance on membership changes, not on
+messages, so ordinary traffic never moves this.
 
 ```python
 MlsClient(root, seed, suite, epoch_retention_limit=8)
@@ -90,13 +89,17 @@ MlsClient(root, seed, suite, epoch_retention_limit=8)
 
 That keeps the eight most recent epochs and deletes the rest, narrowing the
 window in which old secrets exist on disk. Anything still undelivered from a
-dropped epoch becomes permanently unreadable to that member.
+dropped epoch becomes permanently unreadable to that member — there is no
+recovery, because the epoch secret is the only copy.
 
 ## Building from source
 
+From a checkout of [`codeberg.org/rine/rine-src`](https://codeberg.org/rine/rine-src), at its
+root:
+
 ```bash
-bash tests/run.sh      # builds both wheels, runs the suite, then uses the shipped wheel
+bash rine-mls/crates/rine-mls-py/tests/run.sh   # builds both wheels, runs the suite, then uses the shipped wheel
 ```
 
-The version is owned by the Rust workspace (`rine-mls/Cargo.toml`); maturin reads
-it from there.
+The version is owned by the Rust workspace at `rine-mls/Cargo.toml`; maturin
+reads it from there.

@@ -16,6 +16,17 @@ set -euo pipefail
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$crate_dir"
 
+# This gate builds for the HOST, and this host's triple (x86_64-unknown-linux-gnu) is
+# ALSO one of the six cross-build targets. With a shared target/ the gate's cdylib lands
+# on top of the pinned builder's at target/x86_64-unknown-linux-gnu/release/, and the
+# re-stage step then copies a workstation build into npm/linux-x64-gnu/ — five published
+# addons off the pinned builder plus one off whatever machine ran the tests. Every other
+# gate passes it: same architecture, same stamp, same exported names.
+# So gate builds get their own tree. It lives inside target/ because rine-mls/.gitignore
+# ignores `/target` and nothing else — a sibling target-gate/ would be untracked, and
+# sync-codeberg.sh `git add -A`s untracked files that main's .gitignore does not cover.
+export CARGO_TARGET_DIR="$(cd "$crate_dir/../.." && pwd)/target/gate"
+
 echo "== build with panic-probe =="
 npm run --silent build:probe
 

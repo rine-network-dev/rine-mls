@@ -38,6 +38,12 @@
 //! *clients* over the same store directory are a different matter: see the
 //! warning on [`MlsClient`].
 
+// The other ABI seam, held to the same rule as the napi one, and `deny` for the
+// same forced reason plus one of its own: the build stamp below is a
+// `#[no_mangle]` static, which the `unsafe_code` lint covers and which `forbid`
+// leaves no way to exempt. See the note in `rine-mls-node`'s lib.rs.
+#![deny(unsafe_code)]
+
 mod client;
 mod error;
 mod group;
@@ -50,7 +56,21 @@ use rine_mls_core::RineCipherSuite;
 
 pub use client::MlsClient;
 pub use group::MlsGroup;
-pub use types::{AppMessage, CommitBundle};
+pub use types::{AppMessage, CommitBundle, MemberIdentity};
+
+/// Which release this extension module was compiled from, as a plain string in
+/// the binary. The six published wheels are cross-compiled and only one of them
+/// can be imported on the host that publishes them, so this is what
+/// `scripts/verify-mls-artifacts.sh` reads out of each wheel's extension module
+/// to refuse one left over from an earlier build. Exported so the linker keeps
+/// it: it has no caller, and that is the point.
+// The one exemption to the crate's `deny(unsafe_code)`, scoped to this item.
+// A `#[no_mangle]` static is what the lint covers; the alternative is no build
+// stamp, and `verify-mls-artifacts.sh` reads this string out of every shipped
+// artifact to refuse a stale one.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub static RINE_MLS_BUILD_STAMP: &str = concat!("RINEMLS-BUILD/", env!("CARGO_PKG_VERSION"));
 
 #[pymodule]
 fn rine_mls(m: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -58,6 +78,7 @@ fn rine_mls(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<MlsGroup>()?;
     m.add_class::<CommitBundle>()?;
     m.add_class::<AppMessage>()?;
+    m.add_class::<MemberIdentity>()?;
     // Every constant is read off the core rather than restated, so the two
     // bindings cannot disagree about a protocol value or a policy number.
     m.add("CIPHER_SUITE_CLASSICAL", RineCipherSuite::Classical.id())?;
@@ -80,6 +101,16 @@ fn rine_mls(m: &Bound<'_, PyModule>) -> PyResult<()> {
         rine_mls_core::SELF_READ_MAX_ENTRIES,
     )?;
     m.add("SELF_READ_MAX_BYTES", rine_mls_core::SELF_READ_MAX_BYTES)?;
+    // Prior epochs kept when `epoch_retention_limit` is left unset, and the
+    // server-side retention it is derived from.
+    m.add(
+        "EPOCH_RETENTION_DEFAULT",
+        rine_mls_core::EPOCH_RETENTION_DEFAULT,
+    )?;
+    m.add(
+        "MESSAGE_RETENTION_DAYS",
+        rine_mls_core::MESSAGE_RETENTION_DAYS,
+    )?;
     mlkem::register(m)?;
     error::register(m)
 }

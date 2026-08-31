@@ -78,6 +78,7 @@ rine_exceptions! {
     UnsupportedCipherSuite => UnsupportedCipherSuiteError,
     UnexpectedVersionTag => UnexpectedVersionTagError,
     EmptyFrame => EmptyFrameError,
+    UnreadableCredential => UnreadableCredentialError,
     Panic => MlsPanicError,
     Poisoned => MlsPoisonedError,
     MlKem => MlKemError,

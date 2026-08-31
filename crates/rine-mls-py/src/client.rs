@@ -163,10 +163,44 @@ impl MlsClient {
     /// Self-join by RFC 9420 external commit from
     /// ``GET /groups/{id}/mls/group-info``. ``last_commit()`` carries the commit
     /// to POST and the GroupInfo to republish.
+    ///
+    /// A genuine first join: the joiner enters as a new leaf and removes
+    /// nothing. An agent the tree **already** holds is refused by MLS — a
+    /// second leaf carrying one identity is not a thing that can exist — so a
+    /// member recovering from unusable local state wants
+    /// ``resync_by_external_commit`` instead.
     fn join_by_external_commit(&mut self, group_info: &[u8]) -> PyResult<MlsGroup> {
         let inner = &self.inner;
         let (group, bundle) = guard(&mut self.poison, || {
             inner.join_by_external_commit(group_info)
+        })?;
+
+        Ok(MlsGroup::new(group, Some(bundle)))
+    }
+
+    /// Rejoin a group this agent is already a member of, replacing its own
+    /// leaf: RFC 9420's resync form of an external commit, and the path out of
+    /// unusable local state.
+    ///
+    /// ``stale_leaf`` is ``MlsGroup.current_member_index()`` on the old handle,
+    /// read before this call — never a server-supplied index, and never a
+    /// guess. The Remove rides in the same commit as the join, so one O(N)
+    /// commit replaces the leaf with no window in between and nothing to
+    /// reclaim afterwards; the membership count is unchanged. ``last_commit()``
+    /// carries the commit to POST and the GroupInfo to republish, and its
+    /// ``welcomes`` is empty because an external commit adds nobody.
+    ///
+    /// It needs loadable stale state, because that is where the leaf index
+    /// comes from. An agent whose group state is gone entirely has no resync —
+    /// it has to be removed and re-invited.
+    fn resync_by_external_commit(
+        &mut self,
+        group_info: &[u8],
+        stale_leaf: u32,
+    ) -> PyResult<MlsGroup> {
+        let inner = &self.inner;
+        let (group, bundle) = guard(&mut self.poison, || {
+            inner.resync_by_external_commit(group_info, stale_leaf)
         })?;
 
         Ok(MlsGroup::new(group, Some(bundle)))

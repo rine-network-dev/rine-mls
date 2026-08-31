@@ -41,6 +41,9 @@ pub enum RineMlsErrorCode {
     /// The `mls-v1` payload did not carry the `0x04` version tag.
     UnexpectedVersionTag,
     EmptyFrame,
+    /// A ratchet-tree leaf whose credential is not `basic`, met while
+    /// enumerating the tree.
+    UnreadableCredential,
     /// A Rust panic was caught at the FFI boundary, by
     /// [`crate::PanicGuard`], instead of unwinding into the host runtime.
     Panic,
@@ -74,6 +77,7 @@ impl RineMlsErrorCode {
             Self::UnsupportedCipherSuite => "RINE_MLS_UNSUPPORTED_CIPHER_SUITE",
             Self::UnexpectedVersionTag => "RINE_MLS_UNEXPECTED_VERSION_TAG",
             Self::EmptyFrame => "RINE_MLS_EMPTY_FRAME",
+            Self::UnreadableCredential => "RINE_MLS_UNREADABLE_CREDENTIAL",
             Self::Panic => "RINE_MLS_PANIC",
             Self::Poisoned => "RINE_MLS_POISONED",
             Self::MlKem => "RINE_MLS_ML_KEM",
@@ -101,6 +105,7 @@ impl RineMlsError {
             Self::UnsupportedCipherSuite { .. } => RineMlsErrorCode::UnsupportedCipherSuite,
             Self::UnexpectedVersionTag { .. } => RineMlsErrorCode::UnexpectedVersionTag,
             Self::EmptyFrame => RineMlsErrorCode::EmptyFrame,
+            Self::UnreadableCredential { .. } => RineMlsErrorCode::UnreadableCredential,
             Self::MlKem(_) => RineMlsErrorCode::MlKem,
         }
     }

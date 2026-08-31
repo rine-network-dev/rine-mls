@@ -33,6 +33,16 @@
 //! MLS opens its own client. Two clients over the *same* store directory are the
 //! case worth reading about: see the warning on [`MlsClient`].
 
+// No `unsafe` is written here either, and this is a crate where saying so
+// matters: it is an ABI seam. `deny` rather than the core's `forbid`, and the
+// difference is forced rather than chosen — `#[napi]` expands to code carrying
+// its own `#[allow(unsafe_code)]`, which under `forbid` is a hard error
+// (`E0453: allow(unsafe_code) incompatible with previous forbid`, 46 of them).
+// `deny` still covers every line written in this crate: a hand-written `unsafe`
+// here fails the build, and the only exemption is the item-scoped one below,
+// which a reviewer can see.
+#![deny(unsafe_code)]
+
 mod client;
 mod error;
 mod group;
@@ -47,7 +57,24 @@ use rine_mls_core::RineCipherSuite;
 pub use client::MlsClient;
 pub use group::MlsGroup;
 pub use options::MlsClientOptions;
-pub use types::{AppMessage, CommitBundle};
+pub use types::{AppMessage, CommitBundle, MemberIdentity};
+
+/// Which release this addon was compiled from, as a plain string in the binary.
+///
+/// The six published addons are cross-compiled and only one of them can be
+/// executed on the host that publishes them, so nothing runnable can tell a
+/// current addon from one left over in `npm/<platform>/` by an earlier build —
+/// and an addon uploaded under the wrong version is a binary that does not
+/// contain the fixes its version number promises. This string is what
+/// `scripts/verify-mls-artifacts.sh` reads out of each artifact to refuse that.
+/// Exported so the linker keeps it: it has no caller, and that is the point.
+// The one exemption to the crate's `deny(unsafe_code)`, scoped to this item.
+// A `#[no_mangle]` static is what the lint covers; the alternative is no build
+// stamp, and `verify-mls-artifacts.sh` reads this string out of every shipped
+// artifact to refuse a stale one.
+#[allow(unsafe_code)]
+#[no_mangle]
+pub static RINE_MLS_BUILD_STAMP: &str = concat!("RINEMLS-BUILD/", env!("CARGO_PKG_VERSION"));
 
 /// The suite ids the server stores in `mls_cipher_suite`, read off the core
 /// rather than restated, so the two can never disagree.
@@ -80,6 +107,17 @@ pub const KEY_PACKAGE_LOW_WATER: u32 = rine_mls_core::KEY_PACKAGE_LOW_WATER as u
 /// request body.
 #[napi]
 pub const KEY_PACKAGE_MAX_BATCH: u32 = rine_mls_core::KEY_PACKAGE_MAX_BATCH as u32;
+
+/// Prior epochs a group keeps secrets for when `epochRetentionLimit` is left
+/// unset — rine's shipped window, derived in the core from the server's
+/// 90-day message retention.
+#[napi]
+pub const EPOCH_RETENTION_DEFAULT: u32 = rine_mls_core::EPOCH_RETENTION_DEFAULT as u32;
+
+/// Days the rine server can still be holding a message for its reader. The
+/// window above is this many days of the fastest-churning group rine serves.
+#[napi]
+pub const MESSAGE_RETENTION_DAYS: u32 = rine_mls_core::MESSAGE_RETENTION_DAYS as u32;
 
 /// How many of its own sends a group keeps readable back.
 #[napi]

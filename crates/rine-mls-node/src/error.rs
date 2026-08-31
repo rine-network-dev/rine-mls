@@ -1,6 +1,6 @@
 //! How a Rust failure reaches JavaScript.
 //!
-//! Two rules, and W3 inherits both:
+//! Two rules, and this binding inherits both:
 //!
 //! 1. **Every failure is typed.** `napi::Error` is generic over its status, and
 //!    napi-rs passes that status straight into `napi_create_error` as the JS

@@ -10,6 +10,13 @@
 #
 # It also asserts the shipped addon carries no `panicProbe`: that method exists
 # only to prove the panic firewall, and must never reach a user.
+#
+# 🔴 It proves the packaging with a HOST build, and must leave no trace of it. The
+# release artifacts staged in npm/<platform>/ come off the pinned Docker builder and are
+# what `--native` uploads; this script used to `cp` its host build straight into
+# npm/linux-x64-gnu/, so running the test gate silently changed what would ship. Both the
+# build tree (CARGO_TARGET_DIR below) and the pack tree ($work/platform) are therefore
+# private to this run — nothing here writes inside the crate's npm/ directories.
 
 set -euo pipefail
 
@@ -19,16 +26,24 @@ trap 'rm -rf "$work"' EXIT
 
 cd "$crate_dir"
 
-echo "[1/4] release build (no panic-probe) + staged artifact"
+# Same reason as test/run.sh: the host triple collides with a cross-build target, and
+# target/gate is inside the one path rine-mls/.gitignore covers.
+export CARGO_TARGET_DIR="$(cd "$crate_dir/../.." && pwd)/target/gate"
+
+echo "[1/4] release build (no panic-probe) + private pack tree"
 npm run --silent build
 node_file="$(ls ./*.node)"
 platform_dir="npm/$(basename "$node_file" .node | sed 's/^rine-mls\.//')"
 test -d "$platform_dir" || { echo "no npm dir for $node_file"; exit 1; }
-cp "$node_file" "$platform_dir/"
+# Pack the platform package from a copy: same package.json and README that ship, this
+# run's addon, and the staged release artifact left exactly as the builder wrote it.
+pack_dir="$work/platform"
+mkdir -p "$pack_dir"
+cp "$platform_dir/package.json" "$platform_dir/README.md" "$node_file" "$pack_dir/"
 
 echo "[2/4] npm pack both packages"
 main_tgz="$work/$(npm pack --silent --pack-destination "$work")"
-platform_tgz="$work/$(cd "$platform_dir" && npm pack --silent --pack-destination "$work")"
+platform_tgz="$work/$(cd "$pack_dir" && npm pack --silent --pack-destination "$work")"
 
 echo "[3/4] install into a clean project"
 mkdir -p "$work/consumer"

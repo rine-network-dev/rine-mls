@@ -21,6 +21,13 @@ crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+# Build into a tree private to the gates, never the one the pinned Docker builder writes
+# (see test/run.sh in the node crate for the full reason). Two things follow from it
+# here: a host wheel can never be mistaken for a cross-built one, and maturin stops
+# fighting the root-owned target/maturin/ that the containerised builder leaves behind —
+# that collision aborted this gate with `Permission denied (os error 13)`.
+export CARGO_TARGET_DIR="$(cd "$crate_dir/../.." && pwd)/target/gate"
+
 # Pinned to the version the cross-compile builder image uses, so a wheel built
 # here and a wheel built there come off the same tool.
 MATURIN=maturin==1.9.4

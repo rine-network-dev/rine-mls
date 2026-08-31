@@ -56,11 +56,92 @@ ciphersuites — is `spike/roundtrip/run.sh`. It boots its own throwaway postgre
 and uvicorn on free ports.
 
 ```bash
-bash rine-mls/spike/roundtrip/run.sh     # from the repo root
+bash spike/roundtrip/run.sh
 ```
 
-Never build this on the production box — Rust compilation there is out of
-bounds (see `CLAUDE.md`, ship-broker precedent).
+rine's production server never compiles Rust: the binaries are cross-built here
+and shipped as artifacts.
+
+The dependency graph has its own gate, separate from the three above:
+
+```bash
+cargo deny check      # advisories, licences, duplicate crypto crates, sources
+```
+
+rine's continuous-integration run carries it as its own stage, and it reports
+SKIPPED rather than passing on a machine where `cargo-deny` is not installed.
+The policy is `deny.toml`.
+
+## Shipped artifacts: six declared, four executed
+
+The crate ships as compiled binaries — six napi addons and six abi3 wheels, cross
+built off-box in the pinned Docker image under `spike/crossbuild/`.
+
+```bash
+# Run from the rine monorepo root, where these live:
+scripts/build-mls-artifacts.sh      # cross-build and stage all twelve
+scripts/verify-mls-artifacts.sh     # stamp + declared API + provenance, a check on BYTES
+scripts/smoke-mls-platforms.sh      # LOAD each one and drive a group through it
+scripts/attest-mls-artifacts.sh     # regenerate BUILD_ATTESTATION.md, then commit it
+```
+
+The verify step greps method names out of each binary; it proves a symbol is present
+and cannot see a wrong signature, a panicking body or a broken ABI. The smoke step is
+the one that executes: it runs the bindings' own suites against the shipped addon and
+wheel inside a container of the matching architecture and libc, and it reaches **four
+of the six platforms** — `linux-x64-gnu` and `linux-x64-musl` natively, the two arm64
+targets under qemu emulation. It needs `docker run --privileged --rm tonistiigi/binfmt
+--install arm64` once, so it is advisory and not part of `ci.sh`.
+
+**`darwin-x64` and `darwin-arm64` are executed by nothing.** No container on a Linux
+host runs Darwin, so those two are cross-compiled, stamped, string-checked and shipped
+without ever having been loaded. The API is declared on six platforms and executed on
+four.
+
+The artifacts are gitignored, so `BUILD_ATTESTATION.md` is what the repository keeps
+about them: a SHA-256 per artifact, the `Cargo.lock` hash and the builder image's
+identity. It records one machine's build and is not a reproducibility claim.
+
+It is also enforced, not just kept. Everything else above reads a *property* of an
+artifact — architecture, build stamp, exported names — and a property is exactly what a
+different build of the same source also has, so a host-toolchain addon dropped into
+`npm/<platform>/` passes every one of them. The digests are the only check that tells
+the pinned builder's bytes from a workstation's, so the publish path runs them twice:
+once before the test gates and once after, because those gates compile for the host and
+this host's triple is also one of the six cross targets. A mismatch means a rebuild
+(`build-mls-artifacts.sh`), never a re-stage — `--stage` copies out of `target/`, which
+is the tree a bad build wrote to in the first place.
+
+## Scale measurements
+
+Ten tests are `#[ignore]`d because they found real groups of up to a thousand
+members. They are where every cost number rine states about groups comes from,
+so they are not optional — they are expensive.
+
+```bash
+cargo test --release --workspace -- --ignored --nocapture --test-threads=1
+```
+
+Always `--release`: each of these documents itself with it, and unoptimised
+ML-KEM and ratchet-tree work measures a different quantity, not a slower one.
+`cargo` locks `target/`, so nothing else may run against this crate at the same
+time — not another measurement, not `ci.sh`.
+
+**Last measured.**
+
+| | |
+|---|---|
+| Commit | `d8a40ea0`, plus this crate's subsequent changes |
+| Date | 2026-08-02 |
+| Host | AMD Ryzen 9 7900X, 12c/24t, 62 GiB |
+| Toolchain | `rustc 1.95.0`, `cargo 1.95.0`, `--release` |
+| Result | 10 passed, 0 failed |
+
+Two of the ten answer questions nothing else in the tree does, and are the ones
+to re-run first after a change to a batch size, a ciphersuite or the ratchet
+tree: `scale_founding`'s `A3` walks the live founding schedule at the group-size
+ceiling against real bytes, and `epoch_window` prices the epoch-retention window
+the server's own message retention is matched to.
 
 ## Ground rules
 
@@ -73,6 +154,8 @@ bounds (see `CLAUDE.md`, ship-broker precedent).
 - This core does not interoperate with the ts-mls engine it replaces. Key
   packages published by either are unreadable to the other, so the switch is a
   cutover: pools are drained and republished, and groups are recreated.
-- Every past epoch secret is retained by default, so a returning member reads its
-  backlog. `RineMlsOptions::epoch_retention` trades that reach for a narrower
-  window in which old secrets exist on disk.
+- Past epoch secrets are retained for a fixed window, derived once in
+  `policy/retention.rs` from the rine server's own 90-day message retention, so
+  a returning member reads any backlog the server can still hand it.
+  `RineMlsOptions::epoch_retention` trades that reach for a narrower window in
+  which old secrets exist on disk.

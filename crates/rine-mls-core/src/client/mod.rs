@@ -73,7 +73,7 @@ impl RineMlsClient {
         suite: RineCipherSuite,
         options: RineMlsOptions,
     ) -> Self {
-        // Two commit options rine's control plane depends on:
+        // Three commit options rine's control plane depends on:
         //
         // - the ratchet tree rides in every commit and GroupInfo, because rine
         //   has no out-of-band tree-sync channel, so a joiner's only source of
@@ -81,11 +81,20 @@ impl RineMlsClient {
         // - one Welcome per added member, never one shared Welcome, because
         //   rine delivers Welcomes per agent (`welcomes: [{agent_id, welcome}]`)
         //   and a shared one has no single recipient to address it to. MLS
-        //   defaults the other way, so this is set rather than assumed.
+        //   defaults the other way, so this is set rather than assumed;
+        // - every commit carries an UpdatePath, always. MLS lets a commit that
+        //   only adds members skip the path, and then the committer's own leaf
+        //   keys and the path above it are unchanged across the epoch: the new
+        //   epoch's secrets are derived from key material a member who was
+        //   compromised before it already holds, so that epoch inherits the
+        //   compromise instead of healing it. Post-compromise security is a
+        //   property rine states about its groups, and it is only true if the
+        //   path is there on every commit, so this is not a knob.
         let mls_rules = DefaultMlsRules::new().with_commit_options(
             CommitOptions::new()
                 .with_ratchet_tree_extension(true)
-                .with_single_welcome_message(false),
+                .with_single_welcome_message(false)
+                .with_path_required(true),
         );
 
         let key_packages = FileKeyPackageStorage::new(store_root.clone());

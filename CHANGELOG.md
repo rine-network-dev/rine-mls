@@ -5,6 +5,54 @@ documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-25
+
+Two fixes to how local MLS state reaches disk. Existing state is read exactly as
+before — nothing has to be migrated, recreated or rejoined.
+
+### Fixed
+
+- **Concurrent saves could leave a spliced group state.** The temp file a save
+  wrote through was named after its destination, so two processes saving the
+  same group opened the *same* path, truncated it under each other and both
+  renamed it into place. The result was a mix of two states, which no reader can
+  recover from. Each write now uses a temp name unique to its writer.
+- **A save that never finished left its temp file behind.** A process killed
+  between opening a temp file and renaming it into place left a full copy of the
+  group's state — retired epoch secrets included — in the group directory, where
+  nothing removed it and no listing showed it. Each save now reclaims the
+  abandoned temps of the file it writes. A temp a live writer still holds is left
+  alone. The reclaim covers the temps this release writes. One left behind by
+  0.1.0 carries a different name — that release replaced the destination's
+  extension, so `epochs/1.bin` was written through `epochs/1.tmp` — and stays
+  where it is. Under `<config>/keys/<agent>/mls2/`, a `.tmp` whose name does not
+  also carry `.bin` is such a leftover and can be deleted while no rine process
+  is running.
+
+### Added
+
+- **A format tag on the files holding `mls-rs`'s serialization** — `state.bin`,
+  `epochs/<n>.bin` and `key_packages/<hex>.bin`. Those bytes are only
+  interpretable by the `mls-rs` version that wrote them, and nothing on disk said
+  which one that was; a future `mls-rs` bump would have reinterpreted them
+  silently. State that carries no tag is read as version 1, so files written by
+  0.1.0 open normally. State written by a *newer* rine-mls is refused by name and
+  reported as its own error, not as corruption.
+
+### Note — upgrade the npm and PyPI halves together
+
+The tag reads in both directions but is only written in one. 0.1.0 knows nothing
+about it, so state that 0.1.1 has written is unreadable to a 0.1.0 client, which
+reports it as a protocol error.
+
+This matters because an agent has one MLS state directory
+(`<config>/keys/<agent>/mls2/`) and every rine surface on the machine shares it:
+the Python SDK reads and writes the same files as the CLI, the MCP server and
+the TypeScript SDK. Upgrading PyPI `rine-mls` while the npm `@rine-network/mls`
+stack stays on 0.1.0 leaves the older half unable to open groups the newer half
+has saved, until it is upgraded too. Upgrade both — through the packages that
+depend on them, `rine` and `@rine-network/core` — and no group is interrupted.
+
 ## [0.1.0] - 2026-07-23
 
 First release of rine's MLS core in Rust — one RFC 9420 implementation, wrapping

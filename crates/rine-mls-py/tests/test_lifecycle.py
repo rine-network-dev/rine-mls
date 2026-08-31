@@ -131,3 +131,76 @@ def test_constants_when_read_from_the_wheel_match_the_cores_policy():
     assert rine_mls.KEY_PACKAGE_LOW_WATER < rine_mls.KEY_PACKAGE_TARGET
     assert rine_mls.KEY_PACKAGE_TARGET <= rine_mls.KEY_PACKAGE_MAX_BATCH
     assert rine_mls.SELF_READ_MAX_ENTRIES > 0 and rine_mls.SELF_READ_MAX_BYTES > 0
+    assert rine_mls.EPOCH_RETENTION_DEFAULT >= rine_mls.MESSAGE_RETENTION_DAYS, (
+        "the epoch window is the server's retention in epochs, so at least a day of it"
+    )
+
+
+# The tree-query and recovery surface the clients are built on: enumerate
+# the ratchet tree, learn this handle's own leaf, and rejoin on it.
+@pytest.mark.parametrize("suite", SUITES)
+def test_tree_enumeration_and_resync_when_driven_from_python_hold(make_agent, suite):
+    alice = make_agent("alice", suite).open()
+    bob = make_agent("bob", suite).open()
+    carol = make_agent("carol", suite).open()
+
+    gid = group_id()
+    alice_group = alice.create_group_with_members(
+        gid, [bob.generate_key_package(), carol.generate_key_package()]
+    )
+    init = alice_group.last_commit()
+    bob_group = bob.join_from_welcome(init.welcomes[0])
+    carol_group = carol.join_from_welcome(init.welcomes[1])
+
+    # --- the tree is enumerable, and every index round-trips -----------------
+    tree = alice_group.member_identities()
+    assert len(tree) == 3, "every occupied leaf is reported, once"
+
+    for member in tree:
+        assert alice_group.member_index(member.identity) == member.index, (
+            "an enumerated leaf must be the leaf the identity-keyed lookup names"
+        )
+
+    assert sorted(m.identity for m in tree) == sorted(
+        c.public_key() for c in (alice, bob, carol)
+    ), "the identities are the members' public keys"
+
+    for group, client in ((alice_group, alice), (bob_group, bob)):
+        assert group.current_member_index() == group.member_index(client.public_key()), (
+            "a handle must agree with itself about which leaf it occupies"
+        )
+
+    # --- recovery: the plain join is refused, the resync is not --------------
+    stale_leaf = bob_group.current_member_index()
+
+    assert code_of(lambda: bob.join_by_external_commit(alice_group.group_info())) == (
+        "RINE_MLS_PROTOCOL"
+    ), "a seated agent cannot take a second leaf, so the plain join is not a resync"
+
+    resynced = bob.resync_by_external_commit(alice_group.group_info(), stale_leaf)
+    commit = resynced.last_commit()
+
+    assert commit.welcomes == [], "a resync admits nobody"
+    assert alice_group.apply_commit(commit.commit) == 2
+    assert carol_group.apply_commit(commit.commit) == 2, "a bystander applies it too"
+
+    after = resynced.member_identities()
+    assert len(after) == len(tree), "a resync does not change the membership count"
+    assert [m.index for m in after if m.identity == bob.public_key()] == [
+        resynced.current_member_index()
+    ], "the stale leaf is replaced, not doubled"
+
+    hello = alice_group.encrypt_application_message(b"welcome back")
+    assert resynced.decrypt_application_message(hello).envelope == b"welcome back"
+
+
+# Both ends of the one seam every binding passes epoch retention through: an
+# unset limit is the shipped window, and zero is refused rather than silently
+# accepted.
+def test_epoch_retention_when_configured_takes_the_shipped_window_or_refuses(make_agent):
+    make_agent("unset").open().create_group(group_id())
+    make_agent("tuned", epoch_retention_limit=2).open()
+
+    assert code_of(lambda: make_agent("broken", epoch_retention_limit=0).open()) == (
+        "RINE_MLS_INVALID_EPOCH_RETENTION"
+    )

@@ -3,7 +3,9 @@ use napi_derive::napi;
 use rine_mls_core::{wire_epoch, PanicGuard, RineMlsError, RineMlsGroup};
 
 use crate::error::{from_core, guard, MlsError};
-use crate::types::{convert_bundle, to_vecs, AppMessage, CommitBundle};
+use crate::types::{
+    convert_bundle, into_members, to_vecs, AppMessage, CommitBundle, MemberIdentity,
+};
 
 /// One MLS group as seen by one agent.
 ///
@@ -77,6 +79,33 @@ impl MlsGroup {
     pub fn member_index(&mut self, identity: Uint8Array) -> Result<u32, MlsError> {
         let inner = &self.inner;
         guard(&mut self.poison, || inner.member_index(&identity))
+    }
+
+    /// Every occupied leaf in the ratchet tree, as `{ index, identity }` — the
+    /// inverse of `memberIndex`, and the only way to learn that a leaf exists
+    /// without already knowing whose it is. That is what an *orphan* leaf
+    /// needs: one whose agent the server reports in neither
+    /// `GET /groups/{id}/members` nor
+    /// `GET /groups/{id}/requests?outstanding=live`, so no caller can produce
+    /// its identity to ask about it.
+    ///
+    /// A leaf carrying a credential this core cannot read fails the whole call
+    /// with `RINE_MLS_UNREADABLE_CREDENTIAL` rather than being skipped. Order
+    /// follows the tree, so it is stable for a given tree but carries no
+    /// meaning — never index into the result to identify a member.
+    #[napi]
+    pub fn member_identities(&mut self) -> Result<Vec<MemberIdentity>, MlsError> {
+        let inner = &self.inner;
+        guard(&mut self.poison, || inner.member_identities()).map(into_members)
+    }
+
+    /// This handle's own leaf index — the `staleLeaf` argument to
+    /// `MlsClient.resyncByExternalCommit`, and the only place it may come from.
+    /// The server does not know MLS leaf indices.
+    #[napi]
+    pub fn current_member_index(&mut self) -> Result<u32, MlsError> {
+        let inner = &self.inner;
+        guard(&mut self.poison, || inner.current_member_index())
     }
 
     /// A fresh GroupInfo for the current epoch, carrying `external_pub` and the

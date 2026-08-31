@@ -3,7 +3,7 @@
 The rine HTTP calls, the two base64 alphabets the protocol uses, and the signed
 inner envelope. It restates the ``mls-v1`` envelope codec on purpose: the
 TypeScript half states it too, and whether two independent statements of it
-produce the same bytes is exactly the interop claim under test. W3's real
+produce the same bytes is exactly the interop claim under test. The real
 integration puts this inside the Python SDK.
 """
 

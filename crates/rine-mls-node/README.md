@@ -14,8 +14,9 @@ The prebuilt addon for the running platform arrives as an optional dependency �
 install time. Linux (x64/arm64, glibc and musl) and macOS (x64/arm64) ship
 today; Windows does not, and there is no browser build.
 
-Of those six, Linux x64 (glibc) is the target the test suite runs on. The other
-five are cross-built and not executed.
+Of those six, the four Linux artifacts are executed against the bindings' own
+suites — x64 natively, arm64 under emulation. The two macOS artifacts are
+cross-built, stamped and string-checked, and executed by nothing.
 
 ## Using it
 
@@ -84,9 +85,11 @@ key package in the peer's pool cannot help and only empties it.
 
 ## Epoch retention
 
-By default every past epoch secret is kept, so a member returning after any
-number of commits still decrypts the backlog queued for it. Epochs advance on
-membership changes, not on messages, so this stays small.
+Past epoch secrets are kept for `EPOCH_RETENTION_DEFAULT` epochs, which is the
+rine server's 90-day message retention converted into epochs at the churn rate
+of the largest group rine serves. A member returning inside that window still
+decrypts the backlog queued for it. Epochs advance on membership changes, not on
+messages, so ordinary traffic never moves this.
 
 ```js
 MlsClient.open(root, seed, suite, { epochRetentionLimit: 8 })
@@ -94,7 +97,8 @@ MlsClient.open(root, seed, suite, { epochRetentionLimit: 8 })
 
 That keeps the eight most recent epochs and deletes the rest, narrowing the
 window in which old secrets exist on disk. Anything still undelivered from a
-dropped epoch becomes permanently unreadable to that member.
+dropped epoch becomes permanently unreadable to that member — there is no
+recovery, because the epoch secret is the only copy.
 
 ## Building from source
 

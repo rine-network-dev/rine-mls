@@ -78,6 +78,66 @@ impl RineMlsGroup {
         Ok(self.inner.member_with_identity(identity)?.index)
     }
 
+    /// Every occupied leaf in the ratchet tree, as `(leaf index,
+    /// basic-credential identity)` — the inverse of
+    /// [`RineMlsGroup::member_index`], and the only way to learn that a leaf
+    /// exists without already knowing whose it is.
+    ///
+    /// That is what an *orphan* leaf needs: one whose agent the server reports
+    /// in neither the member roster nor the live-invitation list, so no caller
+    /// can produce its identity to ask about it. Reclaiming those leaves is the
+    /// difference between expiry freeing a seat and expiry bounding the tree —
+    /// a blanked leaf is genuinely re-occupied by the next joiner, so a
+    /// reclaimed leaf stops taxing every later Welcome and commit.
+    ///
+    /// The indices are true leaf indices, in the same space
+    /// [`RineMlsGroup::remove_member`] takes. mls-rs documents its *iterator
+    /// position* as uncorrelated with `ReceivedMessage` sender indices, which
+    /// is a different quantity; the round trip against `member_index` is
+    /// asserted per leaf on both suites by `tests/leaf_enumeration.rs`, because
+    /// this feeds a verb that removes members.
+    ///
+    /// Order follows the tree, so it is stable for a given tree but carries no
+    /// meaning — never index into the result to identify a member.
+    pub fn member_identities(&self) -> Result<Vec<(u32, Vec<u8>)>> {
+        self.inner
+            .roster()
+            .members_iter()
+            .map(|member| {
+                let identity = member
+                    .signing_identity
+                    .credential
+                    .as_basic()
+                    .ok_or(RineMlsError::UnreadableCredential {
+                        index: member.index,
+                    })?
+                    .identifier
+                    .clone();
+
+                Ok((member.index, identity))
+            })
+            .collect()
+    }
+
+    /// This handle's own leaf index.
+    ///
+    /// The `stale_leaf` argument to
+    /// [`RineMlsClient::resync_by_external_commit`](crate::RineMlsClient::resync_by_external_commit),
+    /// and the only place it may come from: a resync names the leaf this agent
+    /// already occupies, and this handle is the only party that knows which one
+    /// that is — the server does not know MLS leaf indices, and an identity
+    /// never occupies two leaves for MLS to be asked about.
+    ///
+    /// A leaf index survives staleness, which is the property the whole resync
+    /// path rests on: `tests/leaf_enumeration.rs` measures a handle stranded at
+    /// epoch 2 while its group ran to epoch 13 — through five joins and three
+    /// departures — reload from disk and still report leaf 1.
+    pub fn current_member_index(&self) -> Result<u32> {
+        self.active()?;
+
+        Ok(self.inner.current_member_index())
+    }
+
     /// A fresh GroupInfo for the current epoch, carrying `external_pub` and the
     /// ratchet tree. Single-use per epoch (RFC 9420 §12.4.3.2), so every commit
     /// republishes one or the next external joiner targets a stale epoch.

@@ -7,8 +7,8 @@ use zeroize::Zeroizing;
 use crate::policy::EpochRetention;
 
 use super::{
-    create_private_dir, read_optional, remove_if_present, write_private, MlsStoreRoot, Result,
-    StoreError,
+    create_private_dir, read_optional_framed, remove_if_present, write_framed, MlsStoreRoot,
+    Result, StoreError,
 };
 
 /// [`GroupStateStorage`] backed by one directory per group.
@@ -81,14 +81,14 @@ impl FileGroupStateStorage {
         Ok(ids)
     }
 
-    /// Delete the epochs the retention policy no longer covers. Under the
-    /// default full-backlog policy this deletes nothing and never even lists
-    /// the directory — retention only costs what it is asked to cost.
+    /// Delete the epochs the retention policy no longer covers.
+    ///
+    /// The window is a deletion rather than a filter: a secret past it is gone
+    /// from disk, not merely ignored on read. There is no policy under which
+    /// this is a no-op — [`EpochRetention`] is always a finite count — which is
+    /// what stops a group's epoch directory growing for the life of the group.
     fn trim_epochs(&self, group_id: &[u8]) -> Result<()> {
-        let Some(keep) = self.retention.limit() else {
-            return Ok(());
-        };
-
+        let keep = self.retention.limit();
         let ids = self.stored_epochs(group_id)?;
 
         for id in ids.iter().rev().skip(keep) {
@@ -103,11 +103,11 @@ impl GroupStateStorage for FileGroupStateStorage {
     type Error = StoreError;
 
     fn state(&self, group_id: &[u8]) -> Result<Option<Zeroizing<Vec<u8>>>> {
-        Ok(read_optional(&self.state_path(group_id))?.map(Zeroizing::new))
+        Ok(read_optional_framed(&self.state_path(group_id))?.map(Zeroizing::new))
     }
 
     fn epoch(&self, group_id: &[u8], epoch_id: u64) -> Result<Option<Zeroizing<Vec<u8>>>> {
-        Ok(read_optional(&self.epoch_path(group_id, epoch_id))?.map(Zeroizing::new))
+        Ok(read_optional_framed(&self.epoch_path(group_id, epoch_id))?.map(Zeroizing::new))
     }
 
     fn write(
@@ -118,12 +118,28 @@ impl GroupStateStorage for FileGroupStateStorage {
     ) -> Result<()> {
         create_private_dir(&self.epochs_dir(&state.id))?;
 
+        // Only an insert can widen the retained set, and trimming costs a
+        // listing of the whole window — MEASURED at +1.4 ms per persist once it
+        // is full, against a 5.0 ms persist (`tests/epoch_window.rs`).
+        // Persisting a message inserts no epoch, and messages are the write
+        // path that runs hundreds of times a day against a handful of commits,
+        // so paying it there would be a directory scan bought for nothing. The
+        // one consequence: a client reopened under a *tighter* limit keeps the
+        // excess until its next commit — one membership change of lag, not an
+        // unbounded one.
+        let widened = !epoch_inserts.is_empty();
+
         for epoch in epoch_inserts.into_iter().chain(epoch_updates) {
-            write_private(&self.epoch_path(&state.id, epoch.id), &epoch.data)?;
+            write_framed(&self.epoch_path(&state.id, epoch.id), &epoch.data)?;
         }
 
-        write_private(&self.state_path(&state.id), &state.data)?;
-        self.trim_epochs(&state.id)
+        write_framed(&self.state_path(&state.id), &state.data)?;
+
+        if widened {
+            self.trim_epochs(&state.id)?;
+        }
+
+        Ok(())
     }
 
     fn max_epoch_id(&self, group_id: &[u8]) -> Result<Option<u64>> {

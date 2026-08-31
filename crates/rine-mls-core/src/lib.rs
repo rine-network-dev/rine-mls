@@ -29,6 +29,13 @@
 //! seam, so the crate stays buildable for `wasm32` and every platform in the
 //! release matrix.
 
+// This crate writes no `unsafe`, and `forbid` is what makes that a guarantee
+// rather than an observation that held the last time somebody grepped. `forbid`
+// rather than `deny` on purpose: `deny` can be turned off by an inner
+// `#[allow]` in the module that wants it, which is exactly the edit a reviewer
+// would have to notice.
+#![forbid(unsafe_code)]
+
 mod client;
 mod crypto;
 mod epoch;
@@ -55,8 +62,8 @@ pub use frame::APP_MESSAGE_TAG;
 pub use group::{AppMessage, CommitBundle, RineMlsGroup};
 pub use identity::AgentSigningKey;
 pub use policy::{
-    key_package_shortfall, EpochRetention, KEY_PACKAGE_LOW_WATER, KEY_PACKAGE_MAX_BATCH,
-    KEY_PACKAGE_TARGET,
+    key_package_shortfall, EpochRetention, EPOCH_RETENTION_DEFAULT, KEY_PACKAGE_LOW_WATER,
+    KEY_PACKAGE_MAX_BATCH, KEY_PACKAGE_TARGET, MESSAGE_RETENTION_DAYS,
 };
 pub use store::{
     FileGroupStateStorage, FileKeyPackageStorage, MlsStoreRoot, SelfReadCache, StoreError,

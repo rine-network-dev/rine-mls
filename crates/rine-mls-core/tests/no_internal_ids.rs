@@ -3,11 +3,11 @@
 //! rine's release gate scrubs internal decision IDs (`SPEC DEC` decision tags)
 //! and gate finding IDs (single-letter finding tags) from anything a user or the
 //! Codeberg mirror receives: they point into `phases/`, which the mirror
-//! excludes, so on a
-//! public surface they are dangling references to nothing. The npm package ships
-//! `index.d.ts` as its `types` and the maturin sdist ships `pyproject.toml`; the
-//! whole `rine-mls/` source tree mirrors publicly. This walks every text source
-//! in the workspace and refuses any `<PREFIX>-<digit>` internal-ID token.
+//! excludes, so on a public surface they are dangling references to nothing.
+//! The npm package ships `index.d.ts` as its `types` and the maturin sdist
+//! ships `pyproject.toml`; the whole `rine-mls/` source tree mirrors publicly.
+//! This walks every text source in the workspace and refuses any
+//! `<PREFIX>-<digit>` internal-ID token.
 
 use std::fs;
 use std::path::{Path, PathBuf};

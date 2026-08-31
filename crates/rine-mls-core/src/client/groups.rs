@@ -72,15 +72,56 @@ impl RineMlsClient {
     /// No Welcome, no admin action: the joiner mints its own commit, which
     /// existing members apply to advance the epoch.
     ///
-    /// The joiner enters as a new leaf and removes nothing — RFC 9420's resync
-    /// form of an external commit, which replaces an existing leaf, is not a
-    /// path rine offers.
+    /// The joiner enters as a new leaf and removes nothing. An agent that is
+    /// **already** a member cannot use this path — MLS refuses a second leaf
+    /// carrying an identity the tree already holds — so a member recovering
+    /// from unusable local state wants
+    /// [`RineMlsClient::resync_by_external_commit`] instead.
     pub fn join_by_external_commit(
         &self,
         group_info: &[u8],
     ) -> Result<(RineMlsGroup, CommitBundle)> {
+        self.external_commit(group_info, None)
+    }
+
+    /// Rejoin a group this agent is already a member of, replacing its own
+    /// leaf: RFC 9420's resync form of an external commit.
+    ///
+    /// This is the path out of unusable local state — a config dir restored
+    /// from a backup, or one whose epoch secrets no longer match the group.
+    /// `stale_leaf` is the leaf this agent currently occupies, read from the
+    /// old handle with [`RineMlsGroup::current_member_index`].
+    ///
+    /// The removal rides in the **same** commit as the join, which is what
+    /// makes this the resync form rather than a join followed by a cleanup:
+    /// the group is never in a state where one agent holds two leaves, so
+    /// there is no window in which a stale leaf can be orphaned, and the
+    /// recovery costs one O(N) commit rather than two.
+    ///
+    /// Naming a leaf that is not this agent's own is refused by MLS, not by
+    /// rine: an external commit may carry exactly one Remove, and RFC 9420
+    /// requires it to target the committer's own prior identity.
+    pub fn resync_by_external_commit(
+        &self,
+        group_info: &[u8],
+        stale_leaf: u32,
+    ) -> Result<(RineMlsGroup, CommitBundle)> {
+        self.external_commit(group_info, Some(stale_leaf))
+    }
+
+    fn external_commit(
+        &self,
+        group_info: &[u8],
+        replacing: Option<u32>,
+    ) -> Result<(RineMlsGroup, CommitBundle)> {
         let message = wire::decode(group_info, MlsBlobKind::GroupInfo, self.suite)?;
-        let (inner, commit) = self.inner.external_commit_builder()?.build(message)?;
+
+        let mut builder = self.inner.external_commit_builder()?;
+        if let Some(stale_leaf) = replacing {
+            builder = builder.with_removal(stale_leaf);
+        }
+
+        let (inner, commit) = builder.build(message)?;
 
         let group = self.group(inner);
         let bundle = group.external_join_bundle(commit)?;

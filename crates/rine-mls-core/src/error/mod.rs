@@ -125,6 +125,16 @@ pub enum RineMlsError {
     #[error("mls-v1 application message is empty")]
     EmptyFrame,
 
+    /// A ratchet-tree leaf whose credential is not `basic`, met while
+    /// enumerating the tree ([`crate::RineMlsGroup::member_identities`]).
+    ///
+    /// rine mints only basic credentials, so this cannot arise from a group
+    /// rine built. It is raised rather than skipped because the enumeration
+    /// feeds an orphan computation that *removes* members: a leaf silently
+    /// dropped from the roster is a leaf no set difference can ever name.
+    #[error("ratchet-tree leaf {index} carries a non-basic credential")]
+    UnreadableCredential { index: u32 },
+
     /// A raw ML-KEM-768 key or ciphertext the DM envelope path refused. Not an
     /// MLS failure — it reaches this enum so the crate's one error taxonomy
     /// covers everything the FFI bindings can raise.

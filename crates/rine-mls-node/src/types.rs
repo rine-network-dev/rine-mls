@@ -26,6 +26,26 @@ pub struct AppMessage {
     pub sender_index: u32,
 }
 
+/// One occupied leaf of the ratchet tree: where it sits, and whose it is.
+/// `identity` is the member's raw Ed25519 public key, the same value
+/// `MlsClient.publicKey()` returns and `MlsGroup.memberIndex` takes.
+#[napi(object)]
+pub struct MemberIdentity {
+    pub index: u32,
+    pub identity: Uint8Array,
+}
+
+/// Move the core's `(index, identity)` pairs out to JS.
+pub(crate) fn into_members(members: Vec<(u32, Vec<u8>)>) -> Vec<MemberIdentity> {
+    members
+        .into_iter()
+        .map(|(index, identity)| MemberIdentity {
+            index,
+            identity: Uint8Array::new(identity),
+        })
+        .collect()
+}
+
 /// Copy JS-owned buffers into Rust for the duration of a call.
 pub(crate) fn to_vecs(arrays: &[Uint8Array]) -> Vec<Vec<u8>> {
     arrays.iter().map(|a| a.to_vec()).collect()

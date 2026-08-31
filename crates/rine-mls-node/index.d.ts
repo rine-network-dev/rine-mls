@@ -79,8 +79,32 @@ export declare class MlsClient {
    * Self-join by RFC 9420 external commit from
    * `GET /groups/{id}/mls/group-info`. `lastCommit()` carries the commit to
    * POST and the GroupInfo to republish.
+   *
+   * A genuine first join: the joiner enters as a new leaf and removes
+   * nothing. An agent the tree **already** holds is refused by MLS — a
+   * second leaf carrying one identity is not a thing that can exist — so a
+   * member recovering from unusable local state wants
+   * `resyncByExternalCommit` instead.
    */
   joinByExternalCommit(groupInfo: Uint8Array): MlsGroup
+  /**
+   * Rejoin a group this agent is already a member of, replacing its own
+   * leaf: RFC 9420's resync form of an external commit, and the path out of
+   * unusable local state.
+   *
+   * `staleLeaf` is `MlsGroup.currentMemberIndex()` on the old handle, read
+   * before this call — never a server-supplied index, and never a guess.
+   * The Remove rides in the same commit as the join, so one O(N) commit
+   * replaces the leaf with no window in between and nothing to reclaim
+   * afterwards; the membership count is unchanged. `lastCommit()` carries
+   * the commit to POST and the GroupInfo to republish, and its `welcomes` is
+   * empty because an external commit adds nobody.
+   *
+   * It needs loadable stale state, because that is where the leaf index
+   * comes from. An agent whose group state is gone entirely has no resync —
+   * it has to be removed and re-invited.
+   */
+  resyncByExternalCommit(groupInfo: Uint8Array, staleLeaf: number): MlsGroup
   /** Reload a group from local state — what a restarted process does. */
   loadGroup(groupId: Uint8Array): MlsGroup
   /**
@@ -130,6 +154,27 @@ export declare class MlsGroup {
    * Ed25519 public key) is `identity` — the input to [`Self::remove_member`].
    */
   memberIndex(identity: Uint8Array): number
+  /**
+   * Every occupied leaf in the ratchet tree, as `{ index, identity }` — the
+   * inverse of `memberIndex`, and the only way to learn that a leaf exists
+   * without already knowing whose it is. That is what an *orphan* leaf
+   * needs: one whose agent the server reports in neither
+   * `GET /groups/{id}/members` nor
+   * `GET /groups/{id}/requests?outstanding=live`, so no caller can produce
+   * its identity to ask about it.
+   *
+   * A leaf carrying a credential this core cannot read fails the whole call
+   * with `RINE_MLS_UNREADABLE_CREDENTIAL` rather than being skipped. Order
+   * follows the tree, so it is stable for a given tree but carries no
+   * meaning — never index into the result to identify a member.
+   */
+  memberIdentities(): Array<MemberIdentity>
+  /**
+   * This handle's own leaf index — the `staleLeaf` argument to
+   * `MlsClient.resyncByExternalCommit`, and the only place it may come from.
+   * The server does not know MLS leaf indices.
+   */
+  currentMemberIndex(): number
   /**
    * A fresh GroupInfo for the current epoch, carrying `external_pub` and the
    * ratchet tree. Single-use per epoch, so every commit republishes one.
@@ -211,6 +256,13 @@ export interface CommitBundle {
   epoch: number
 }
 
+/**
+ * Prior epochs a group keeps secrets for when `epochRetentionLimit` is left
+ * unset — rine's shipped window, derived in the core from the server's
+ * 90-day message retention.
+ */
+export const EPOCH_RETENTION_DEFAULT: number
+
 /** Inventory at or above which replenishment is a no-op. */
 export const KEY_PACKAGE_LOW_WATER: number
 
@@ -224,6 +276,22 @@ export const KEY_PACKAGE_MAX_BATCH: number
 export const KEY_PACKAGE_TARGET: number
 
 /**
+ * One occupied leaf of the ratchet tree: where it sits, and whose it is.
+ * `identity` is the member's raw Ed25519 public key, the same value
+ * `MlsClient.publicKey()` returns and `MlsGroup.memberIndex` takes.
+ */
+export interface MemberIdentity {
+  index: number
+  identity: Uint8Array
+}
+
+/**
+ * Days the rine server can still be holding a message for its reader. The
+ * window above is this many days of the fastest-churning group rine serves.
+ */
+export const MESSAGE_RETENTION_DAYS: number
+
+/**
  * Optional settings for `MlsClient.open`. Omitting the object, or leaving a
  * field undefined, is rine's shipped policy — a caller that wants the defaults
  * never restates a number.
@@ -232,11 +300,12 @@ export interface MlsClientOptions {
   /**
    * How many prior epochs a group keeps secrets for.
    *
-   * Undefined is the default: keep the full backlog, so anything the server's
-   * undelivered queue can still be holding stays decryptable. A number trades
-   * that reach for a narrower forward-secrecy window — old epoch secrets stop
+   * Undefined is rine's shipped window, `EPOCH_RETENTION_DEFAULT`: enough
+   * epochs to cover the server's 90-day message retention in the
+   * fastest-churning group rine serves. A smaller number trades backlog
+   * reach for a narrower forward-secrecy window — old epoch secrets stop
    * sitting on disk sooner, and a member absent for more than that many
-   * commits can no longer read what it missed. `0` is refused
+   * commits can no longer read what it missed, permanently. `0` is refused
    * (`RINE_MLS_INVALID_EPOCH_RETENTION`): it would not tighten anything, it
    * would break the group.
    */

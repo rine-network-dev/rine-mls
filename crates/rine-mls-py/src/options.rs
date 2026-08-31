@@ -12,10 +12,11 @@ use rine_mls_core::{EpochRetention, Result as CoreResult, RineMlsOptions};
 /// Build the core's options from the keyword form Python passes.
 ///
 /// `epoch_retention_limit` is how many prior epochs a group keeps secrets for.
-/// `None` keeps the full backlog, so anything the server's undelivered queue can
-/// still be holding stays decryptable; a number trades that reach for a narrower
-/// forward-secrecy window. `0` is refused — it would not tighten anything, it
-/// would break the group.
+/// `None` is rine's shipped window, `EPOCH_RETENTION_DEFAULT`: enough epochs to
+/// cover the server's 90-day message retention in the fastest-churning group
+/// rine serves. A smaller number trades backlog reach for a narrower
+/// forward-secrecy window, permanently. `0` is refused — it would not tighten
+/// anything, it would break the group.
 pub(crate) fn client_options(epoch_retention_limit: Option<usize>) -> CoreResult<RineMlsOptions> {
     Ok(RineMlsOptions {
         epoch_retention: EpochRetention::from_limit(epoch_retention_limit)?,

@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use mls_rs_codec::{MlsDecode, MlsEncode};
 use mls_rs_core::key_package::{KeyPackageData, KeyPackageStorage};
 
-use super::{read_optional, remove_if_present, write_private, MlsStoreRoot, Result, StoreError};
+use super::{
+    read_optional_framed, remove_if_present, write_framed, MlsStoreRoot, Result, StoreError,
+};
 
 /// [`KeyPackageStorage`] holding the private half of every KeyPackage this
 /// agent has minted, keyed by its KeyPackage ref.
@@ -96,13 +98,13 @@ impl KeyPackageStorage for FileKeyPackageStorage {
             .mls_encode_to_vec()
             .map_err(|_| StoreError::Corrupt { path: path.clone() })?;
 
-        write_private(&path, &encoded)
+        write_framed(&path, &encoded)
     }
 
     fn get(&self, id: &[u8]) -> Result<Option<KeyPackageData>> {
         let path = self.path(id);
 
-        let Some(bytes) = read_optional(&path)? else {
+        let Some(bytes) = read_optional_framed(&path)? else {
             return Ok(None);
         };
 

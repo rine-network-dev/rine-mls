@@ -3,7 +3,7 @@ use pyo3::types::PyBytes;
 use rine_mls_core::{wire_epoch, PanicGuard, RineMlsError as CoreError, RineMlsGroup};
 
 use crate::error::{from_core, guard};
-use crate::types::{convert_bundle, AppMessage, CommitBundle};
+use crate::types::{convert_bundle, convert_members, AppMessage, CommitBundle, MemberIdentity};
 
 /// One MLS group as seen by one agent.
 ///
@@ -76,6 +76,31 @@ impl MlsGroup {
     fn member_index(&mut self, identity: &[u8]) -> PyResult<u32> {
         let inner = &self.inner;
         guard(&mut self.poison, || inner.member_index(identity))
+    }
+
+    /// Every occupied leaf in the ratchet tree — the inverse of
+    /// ``member_index``, and the only way to learn that a leaf exists without
+    /// already knowing whose it is. That is what an *orphan* leaf needs: one
+    /// whose agent the server reports in neither ``GET /groups/{id}/members``
+    /// nor ``GET /groups/{id}/requests?outstanding=live``, so no caller can
+    /// produce its identity to ask about it.
+    ///
+    /// A leaf carrying a credential this core cannot read raises
+    /// ``UnreadableCredentialError`` for the whole call rather than being
+    /// skipped. Order follows the tree, so it is stable for a given tree but
+    /// carries no meaning — never index into the result to identify a
+    /// member.
+    fn member_identities(&mut self) -> PyResult<Vec<MemberIdentity>> {
+        let inner = &self.inner;
+        guard(&mut self.poison, || inner.member_identities()).map(convert_members)
+    }
+
+    /// This handle's own leaf index — the ``stale_leaf`` argument to
+    /// ``MlsClient.resync_by_external_commit``, and the only place it may come
+    /// from. The server does not know MLS leaf indices.
+    fn current_member_index(&mut self) -> PyResult<u32> {
+        let inner = &self.inner;
+        guard(&mut self.poison, || inner.current_member_index())
     }
 
     /// A fresh GroupInfo for the current epoch, carrying ``external_pub`` and

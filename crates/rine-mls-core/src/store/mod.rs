@@ -14,6 +14,9 @@
 //! Directories are 0700 and files 0600 — they hold group secrets, plaintext and
 //! the private halves of published KeyPackages.
 //!
+//! Every file above whose payload is `mls-rs`'s serialization carries a format
+//! tag ([`mod@format`]); `self_read.bin` carries its own version byte instead.
+//!
 //! The directory is new (`mls2/`) and its serialization is this crate's own.
 //! The ts-mls-era `mls/` directory is never read and never written: MLS client
 //! state is implementation-private and never leaves the machine, so there is no
@@ -21,21 +24,32 @@
 //! than carrying state across cores. The two directories cannot
 //! collide because they do not share a name.
 
+mod files;
+mod format;
 mod group_state;
 mod key_package;
 mod self_read;
+mod temps;
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use mls_rs_core::error::IntoAnyError;
+
+use files::{
+    create_private_dir, read_optional, read_optional_framed, remove_if_present, write_framed,
+    write_private,
+};
 
 pub use group_state::FileGroupStateStorage;
 pub use key_package::FileKeyPackageStorage;
 pub use self_read::{SelfReadCache, SELF_READ_MAX_BYTES, SELF_READ_MAX_ENTRIES};
 
+/// Marked non-exhaustive because a new way for the store to fail is a patch
+/// release here, not a breaking change for whoever matches on it.
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum StoreError {
     #[error("MLS state store I/O error at {path}: {source}")]
     Io {
@@ -46,6 +60,15 @@ pub enum StoreError {
 
     #[error("corrupt MLS state store entry at {path}")]
     Corrupt { path: PathBuf },
+
+    /// Distinct from [`Self::Corrupt`] on purpose: the file is intact and was
+    /// written by a *newer* rine-mls over the same directory. The remedy is to
+    /// upgrade this client, not to discard state.
+    #[error(
+        "MLS state store entry at {path} is format version {version}, which this \
+         build of rine-mls does not know how to read"
+    )]
+    UnknownFormatVersion { path: PathBuf, version: u8 },
 }
 
 impl StoreError {
@@ -99,61 +122,5 @@ impl MlsStoreRoot {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(StoreError::io(&dir, e)),
         }
-    }
-}
-
-fn create_private_dir(path: &Path) -> Result<()> {
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-
-    builder.create(path).map_err(|e| StoreError::io(path, e))
-}
-
-/// Write `bytes` to `path` via a temp file + rename so a crash mid-write cannot
-/// leave a half-written group state behind. The file is 0600 from creation, not
-/// chmod'd afterwards, so secrets are never briefly world-readable.
-fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = path.parent().unwrap_or(Path::new("."));
-    create_private_dir(dir)?;
-
-    let tmp = path.with_extension("tmp");
-    let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-
-    {
-        use std::io::Write;
-        let mut file = options.open(&tmp).map_err(|e| StoreError::io(&tmp, e))?;
-        file.write_all(bytes).map_err(|e| StoreError::io(&tmp, e))?;
-        file.sync_all().map_err(|e| StoreError::io(&tmp, e))?;
-    }
-
-    fs::rename(&tmp, path).map_err(|e| StoreError::io(path, e))
-}
-
-fn read_optional(path: &Path) -> Result<Option<Vec<u8>>> {
-    match fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(StoreError::io(path, e)),
-    }
-}
-
-fn remove_if_present(path: &Path) -> Result<()> {
-    match fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(StoreError::io(path, e)),
     }
 }

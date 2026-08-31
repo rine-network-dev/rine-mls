@@ -1,19 +1,27 @@
 //! What a returning member can still read.
 //!
-//! rine's undelivered queue never drops an undelivered message, so a member
-//! that has been away is handed messages from epochs the group has long since
-//! committed past. Whether those messages are readable is decided entirely by
-//! how many epoch secrets the member kept — hence the default that reaches the
-//! whole backlog, and the knob a deployment sets when it would rather lose
-//! backlog than keep old secrets on disk.
+//! A member that has been away is handed messages from epochs the group has
+//! long since committed past. Whether those messages are readable is decided
+//! entirely by how many epoch secrets the member kept — hence the shipped
+//! window, sized in `policy/retention.rs` to cover the server's own retention,
+//! and the knob a deployment sets when it would rather lose backlog than keep
+//! old secrets on disk.
+//!
+//! Every window is finite now, so these tests exercise a deliberately tiny one:
+//! trimming is the same code path whatever the count, and no test can afford to
+//! commit its way past the shipped one. What pins the shipped window itself is
+//! `policy::retention`'s own unit tests (an unset limit is the derived window,
+//! and the derived window covers ninety days at every modelled churn rate) and
+//! the measurement in `epoch_window.rs`.
 
 mod common;
 
 use std::fs;
-use std::num::NonZeroUsize;
 
 use common::{group_id, TestAgent};
-use rine_mls_core::{EpochRetention, RineCipherSuite, RineMlsGroup, RineMlsOptions};
+use rine_mls_core::{
+    EpochRetention, RineCipherSuite, RineMlsGroup, RineMlsOptions, EPOCH_RETENTION_DEFAULT,
+};
 
 const CHURN_COMMITS: u8 = 6;
 
@@ -109,7 +117,7 @@ fn test_backlog_when_retention_is_tightened_is_traded_away_deliberately() {
             2,
             suite,
             RineMlsOptions {
-                epoch_retention: EpochRetention::Recent(NonZeroUsize::new(2).unwrap()),
+                epoch_retention: EpochRetention::from_limit(Some(2)).expect("a real limit"),
             },
         );
         let (early, _) = backlog_scenario(&bob, suite);
@@ -135,7 +143,7 @@ fn test_epoch_secrets_when_retention_is_tightened_are_deleted_from_disk() {
         2,
         suite,
         RineMlsOptions {
-            epoch_retention: EpochRetention::Recent(NonZeroUsize::new(keep).unwrap()),
+            epoch_retention: EpochRetention::from_limit(Some(keep)).expect("a real limit"),
         },
     );
 
@@ -156,7 +164,7 @@ fn test_epoch_secrets_when_retention_is_tightened_are_deleted_from_disk() {
 }
 
 #[test]
-fn test_epoch_secrets_when_retention_is_default_are_all_kept_on_disk() {
+fn test_epoch_secrets_when_inside_the_shipped_window_are_all_kept_on_disk() {
     let suite = RineCipherSuite::Classical;
     let bob = TestAgent::new(2, suite);
 
@@ -170,7 +178,12 @@ fn test_epoch_secrets_when_retention_is_default_are_all_kept_on_disk() {
     let kept = fs::read_dir(&epochs).expect("epochs dir").count();
 
     assert!(
+        epoch < EPOCH_RETENTION_DEFAULT as u64,
+        "this scenario is meant to sit well inside the shipped window, and epoch \
+         {epoch} has outrun {EPOCH_RETENTION_DEFAULT}",
+    );
+    assert!(
         kept as u64 >= epoch - 2,
-        "the default keeps every prior epoch: {kept} files at epoch {epoch}",
+        "nothing inside the window is trimmed: {kept} files at epoch {epoch}",
     );
 }

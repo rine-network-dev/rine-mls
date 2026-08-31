@@ -4,7 +4,7 @@
 // This restates the `mls-v1` envelope codec that `rine-core/src/crypto` already
 // owns, because the spike must not depend on the stack it exists to validate —
 // and because the Python half has to state it too, which is the interop claim
-// being tested. W3's real integration calls rine-core, not this file.
+// being tested. The real integration calls rine-core, not this file.
 
 import { readFileSync } from "node:fs";
 import { createPrivateKey, createPublicKey, sign, verify } from "node:crypto";

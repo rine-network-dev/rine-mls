@@ -15,6 +15,9 @@ use crate::wire;
 
 use super::RineMlsGroup;
 
+#[cfg(test)]
+mod path_tests;
+
 /// Everything one rine commit produces: the commit to broadcast, one Welcome
 /// per member the commit added, a fresh current-epoch GroupInfo for the next
 /// external joiner, and the epoch the group is now at (what
@@ -44,6 +47,18 @@ impl RineMlsGroup {
     /// An empty slice is a valid, member-less commit — the group-creation case,
     /// where rine still owes the server a commit blob.
     pub fn add_members(&mut self, key_packages: &[Vec<u8>]) -> Result<CommitBundle> {
+        let (output, references) = self.build_add_commit(key_packages)?;
+
+        self.finish_commit(output, &references)
+    }
+
+    /// Build the Add commit without applying it, alongside the KeyPackage
+    /// reference of each member it admits. Split out from [`Self::add_members`]
+    /// so the commit MLS produced can be inspected before it is consumed.
+    fn build_add_commit(
+        &mut self,
+        key_packages: &[Vec<u8>],
+    ) -> Result<(CommitOutput, Vec<KeyPackageRef>)> {
         self.active()?;
 
         let suite = self.cipher_suite()?;
@@ -60,9 +75,7 @@ impl RineMlsGroup {
             builder = builder.add_member(key_package)?;
         }
 
-        let output = builder.build()?;
-
-        self.finish_commit(output, &references)
+        Ok((builder.build()?, references))
     }
 
     /// Commit one inline Add — rine's steady-state "member joins an existing

@@ -1574,7 +1574,7 @@ dependencies = [
 
 [[package]]
 name = "rine-mls-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ed25519-dalek",
  "hex",
@@ -1596,7 +1596,7 @@ dependencies = [
 
 [[package]]
 name = "rine-mls-node"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "napi",
  "napi-build",
@@ -1606,7 +1606,7 @@ dependencies = [
 
 [[package]]
 name = "rine-mls-py"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pyo3",
  "rine-mls-core",

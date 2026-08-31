@@ -1,4 +1,4 @@
-# Pinned cross-compile builder for rine-mls (W2.4).
+# Pinned cross-compile builder for rine-mls.
 # NEVER build on the production CX22 — this image only ever runs on the dev
 # workstation / CI, following the ship-broker.sh precedent.
 FROM rust:1.88-bookworm
