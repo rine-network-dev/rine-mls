@@ -92,6 +92,14 @@ window in which old secrets exist on disk. Anything still undelivered from a
 dropped epoch becomes permanently unreadable to that member — there is no
 recovery, because the epoch secret is the only copy.
 
+## Changelog
+
+[`CHANGELOG.md`](https://codeberg.org/rine/rine-mls/src/branch/main/CHANGELOG.md)
+— one file for both bindings, because there is one release: this package and npm
+`@rine-network/mls` are built from the same Rust workspace at the same version,
+and an entry that applies to one applies to the other. Read it before upgrading
+either half on a machine that runs both; 0.1.1 has a note about exactly that.
+
 ## Building from source
 
 From a checkout of [`codeberg.org/rine/rine-src`](https://codeberg.org/rine/rine-src), at its

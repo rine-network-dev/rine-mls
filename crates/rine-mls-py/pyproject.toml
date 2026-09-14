@@ -16,6 +16,15 @@ dynamic = ["version"]
 
 [project.urls]
 Repository = "https://codeberg.org/rine/rine-src"
+# PyPI renders this as a sidebar link, which is the only route a reader has to the
+# notes: this package publishes WHEELS ONLY (scripts/publish-mls-native.sh in the
+# rine-src monorepo — an sdist would turn "no wheel for your platform" into a doomed
+# Rust compile), and the wheels are cross-built in a pinned builder, so shipping a
+# file inside one costs a full rebuild of all six. The notes live at
+# rine-mls/CHANGELOG.md, one file for both bindings because there is one release;
+# the monorepo's changelog gate resolves it by walking up from this directory and
+# holds the workspace version against it.
+Changelog = "https://codeberg.org/rine/rine-mls/src/branch/main/CHANGELOG.md"
 
 [tool.maturin]
 module-name = "rine_mls"

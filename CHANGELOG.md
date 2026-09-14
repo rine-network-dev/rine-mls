@@ -5,6 +5,24 @@ documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed — both published packages now point at this file
+
+Neither distribution said where its notes were. This file is git-tracked and
+mirrored, so it was always public, but a reader arriving from npm or PyPI had no
+route to it: npm renders only the README, PyPI publishes wheels alone (an sdist
+would turn "no wheel for your platform" into a doomed Rust compile), and neither
+carried a link. Both crate READMEs now open on a Changelog section, and the PyPI
+metadata carries a `Changelog` URL that renders in the sidebar. Nothing about
+the library changed.
+
+The release gate that holds every rine package's version against its own
+changelog now resolves this file for both crates and reads the workspace version
+out of `Cargo.toml`, so a bump that lands with no entry is refused the same way
+it is everywhere else. It used to skip both crates as "not checked", which read
+as a decision and was a blind spot.
+
 ## [0.1.1] - 2026-07-25
 
 Two fixes to how local MLS state reaches disk. Existing state is read exactly as
