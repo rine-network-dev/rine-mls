@@ -21,15 +21,20 @@ thiserror.workspace = true
 hex.workspace = true
 libcrux-ml-kem.workspace = true
 libcrux-sha3.workspace = true
+libcrux-ml-dsa.workspace = true
 x25519-dalek.workspace = true
 rand_core.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
 
+# Reads the committed JSON fixtures: the org-root known-answer file and the
+# vendored RFC 9420 test vectors.
+serde_json = "1"
+
 # Already dependencies of the crate; repeated here so the integration tests can
 # drive the provider through the same traits mls-rs drives it through, and can
-# compare rine's classical suite against the one mls-rs ships.
+# mint the stock classical KeyPackage the suite checks must refuse.
 mls-rs.workspace = true
 mls-rs-core.workspace = true
 mls-rs-crypto-rustcrypto.workspace = true

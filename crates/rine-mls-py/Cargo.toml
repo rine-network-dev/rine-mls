@@ -26,4 +26,7 @@ panic-probe = []
 
 [dependencies]
 rine-mls-core = { path = "../rine-mls-core" }
-pyo3 = { workspace = true }
+# `multiple-pymethods` lets a handle's methods live in more than one block, which
+# is how the escrow, refusal and discard accessors stay out of the over-long
+# `client.rs` and `group.rs`. Scoped here, not on the workspace entry.
+pyo3 = { workspace = true, features = ["multiple-pymethods"] }

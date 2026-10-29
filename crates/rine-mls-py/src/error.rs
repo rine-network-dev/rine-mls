@@ -32,9 +32,20 @@ create_exception!(
     "Base class for every failure raised by rine's MLS core."
 );
 
+/// The base class an exception is declared under: the one written after a
+/// colon in `rine_exceptions!`, else the common `RineMlsError`.
+macro_rules! parent_class {
+    () => {
+        RineMlsError
+    };
+    ($parent:ident) => {
+        $parent
+    };
+}
+
 macro_rules! rine_exceptions {
-    ($($variant:ident => $exc:ident),+ $(,)?) => {
-        $(create_exception!(rine_mls, $exc, RineMlsError);)+
+    ($($variant:ident => $exc:ident $(: $parent:ident)?),+ $(,)?) => {
+        $(create_exception!(rine_mls, $exc, parent_class!($($parent)?));)+
 
         fn typed(code: RineMlsErrorCode, message: String) -> PyErr {
             let err = match code {
@@ -62,6 +73,9 @@ macro_rules! rine_exceptions {
 
 rine_exceptions! {
     Protocol => MlsProtocolError,
+    // A subclass of `MlsProtocolError`: a caller that already catches the
+    // protocol class keeps catching the refusal it used to arrive as.
+    PeerNotAdmitted => PeerNotAdmittedError: MlsProtocolError,
     Store => MlsStoreError,
     EpochConflict => EpochConflictError,
     EpochOverflow => EpochOverflowError,
@@ -82,6 +96,23 @@ rine_exceptions! {
     Panic => MlsPanicError,
     Poisoned => MlsPoisonedError,
     MlKem => MlKemError,
+    MlDsa => MlDsaError,
+    EmptyAgentId => EmptyAgentIdError,
+    InvalidEscrow => InvalidEscrowError,
+    MemberRejected => MemberRejectedError,
+    GenerationTooFar => GenerationTooFarError,
+    NoSeatToReplace => NoSeatToReplaceError,
+    AmbiguousSeat => AmbiguousSeatError,
+    GroupInfoWithoutTree => GroupInfoWithoutTreeError,
+    AllowedGenerationConflict => AllowedGenerationConflictError,
+    LeafAlreadyCurrent => LeafAlreadyCurrentError,
+    SignerLeafMismatch => SignerLeafMismatchError,
+    // A subclass of `MlsProtocolError`: a resync that changes the key used to
+    // arrive as a protocol refusal, and a caller catching that keeps catching it.
+    ResyncChangesKey => ResyncChangesKeyError: MlsProtocolError,
+    CommitPending => CommitPendingError,
+    NoPendingCommit => NoPendingCommitError,
+    MissingGroupInfo => MissingGroupInfoError,
 }
 
 /// Put the wire code on the raised instance, not only on its class.

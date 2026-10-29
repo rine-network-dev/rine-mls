@@ -25,9 +25,11 @@
 //! different ways. The reasoning behind any of it belongs in the core's docs;
 //! what is written here is what a Python caller has to know.
 //!
-//! One exported surface is not MLS: [`mod@mlkem`] is raw ML-KEM-768 for the 1:1
-//! `hpke-hybrid-v1` DM envelope, so the Python SDK's groups and its direct
-//! messages run on one post-quantum implementation instead of two.
+//! Two exported surfaces are not MLS: [`mod@mlkem`] is raw ML-KEM-768 for the 1:1
+//! `hpke-hybrid-v2` DM envelope, so the Python SDK's groups and its direct
+//! messages run on one post-quantum implementation instead of two, and
+//! [`mod@mldsa`] derives ML-DSA-65 public keys from seeds. Both also derive keys
+//! from a seed for the org-root tree.
 //!
 //! All calls are synchronous and hold the GIL. mls-rs' storage traits are
 //! synchronous and every operation is local CPU and local disk; an async wrapper
@@ -44,19 +46,31 @@
 // leaves no way to exempt. See the note in `rine-mls-node`'s lib.rs.
 #![deny(unsafe_code)]
 
+mod allowed;
 mod client;
+mod epoch_reader;
 mod error;
+mod escrow;
 mod group;
+mod group_escrow;
+mod group_update;
+mod key_package_discard;
+mod key_package_key;
+mod mldsa;
 mod mlkem;
 mod options;
+mod refusal;
 mod types;
 
 use pyo3::prelude::*;
 use rine_mls_core::RineCipherSuite;
 
+pub use allowed::AllowedIdentities;
 pub use client::MlsClient;
+pub use epoch_reader::EpochReader;
+pub use escrow::{EscrowBacklog, EscrowExport, EscrowGap, EscrowGapReason, EscrowTake};
 pub use group::MlsGroup;
-pub use types::{AppMessage, CommitBundle, MemberIdentity};
+pub use types::{AppMessage, CommitBundle, MemberIdentity, OpenedMessage};
 
 /// Which release this extension module was compiled from, as a plain string in
 /// the binary. The six published wheels are cross-compiled and only one of them
@@ -79,12 +93,21 @@ fn rine_mls(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<CommitBundle>()?;
     m.add_class::<AppMessage>()?;
     m.add_class::<MemberIdentity>()?;
+    m.add_class::<EscrowExport>()?;
+    m.add_class::<EscrowGapReason>()?;
+    m.add_class::<EscrowGap>()?;
+    m.add_class::<EscrowTake>()?;
+    m.add_class::<EscrowBacklog>()?;
+    m.add_class::<OpenedMessage>()?;
+    m.add_class::<AllowedIdentities>()?;
+    m.add_class::<EpochReader>()?;
     // Every constant is read off the core rather than restated, so the two
     // bindings cannot disagree about a protocol value or a policy number.
-    m.add("CIPHER_SUITE_CLASSICAL", RineCipherSuite::Classical.id())?;
+    // X-Wing is the only suite rine speaks; any other id is refused at client
+    // construction.
     m.add("CIPHER_SUITE_XWING", RineCipherSuite::XWing.id())?;
     // The suite a NEW rine group is created with. Read this rather than
-    // choosing one of the two above.
+    // choosing a constant above.
     m.add("CIPHER_SUITE_DEFAULT", RineCipherSuite::DEFAULT.id())?;
     m.add("APP_MESSAGE_TAG", rine_mls_core::APP_MESSAGE_TAG)?;
     m.add("KEY_PACKAGE_TARGET", rine_mls_core::KEY_PACKAGE_TARGET)?;
@@ -111,6 +134,8 @@ fn rine_mls(m: &Bound<'_, PyModule>) -> PyResult<()> {
         "MESSAGE_RETENTION_DAYS",
         rine_mls_core::MESSAGE_RETENTION_DAYS,
     )?;
+    key_package_key::register(m)?;
     mlkem::register(m)?;
+    mldsa::register(m)?;
     error::register(m)
 }

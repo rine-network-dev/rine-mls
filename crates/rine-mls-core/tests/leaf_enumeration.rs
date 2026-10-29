@@ -31,8 +31,8 @@
 //! that makes it safe to expose: MLS refuses at build time to let that Remove
 //! name anyone else's leaf.
 //!
-//! Everything runs on both suites, because a suite that only works classically
-//! is not a suite rine can ship.
+//! Everything runs once per suite in `RineCipherSuite::ALL` (one today), so a
+//! suite added later is held to the same property.
 //!
 //! `cargo test -p rine-mls-core --test leaf_enumeration -- --nocapture` prints
 //! what each group looked like, so this is the evidence trail as well as the
@@ -41,7 +41,7 @@
 mod common;
 
 use common::{for_each_suite, group_id, TestAgent};
-use rine_mls_core::{RineCipherSuite, RineMlsGroup};
+use rine_mls_core::{MemberLeaf, RineCipherSuite, RineMlsGroup};
 
 /// Members seated before anyone leaves, founder excluded.
 const COHORT: usize = 8;
@@ -67,7 +67,10 @@ fn test_member_identities_when_the_tree_has_blanked_leaves_then_every_index_roun
         // orphan reclamation is gated on: a reclamation verb reads an index out
         // of this list and hands it to `remove_member`, so an index that means
         // something else there removes an innocent member.
-        for (index, identity) in &roster {
+        for MemberLeaf {
+            index, identity, ..
+        } in &roster
+        {
             let found = group
                 .member_index(identity)
                 .expect("an enumerated identity must be findable");
@@ -86,7 +89,7 @@ fn test_member_identities_when_the_tree_has_blanked_leaves_then_every_index_roun
         // a live member look like an orphan — the set difference reclamation
         // computes would name it for removal — and a long one keeps a departed
         // member's leaf invisible to reclamation.
-        let mut enumerated: Vec<u32> = roster.iter().map(|(index, _)| *index).collect();
+        let mut enumerated: Vec<u32> = roster.iter().map(|leaf| leaf.index).collect();
         enumerated.sort_unstable();
 
         let mut expected: Vec<u32> = live
@@ -174,7 +177,7 @@ fn test_current_member_index_when_the_group_is_open_then_it_names_this_handles_o
 /// The duplicate-leaf regression's premise: that a resync seats a new leaf and
 /// abandons the old one, so the agent's presence silently doubles.
 /// **MEASURED FALSE** — mls-rs
-/// refuses the plain external commit outright, on both suites, with `duplicate
+/// refuses the plain external commit outright, on every suite, with `duplicate
 /// signature key, hpke key or identity found at index N`.
 ///
 /// That is a stricter and better answer than the decision assumed, and it is
@@ -298,15 +301,15 @@ fn test_resync_by_external_commit_when_the_agent_is_already_seated_then_it_repla
         let live_leaf = resynced.current_member_index().expect("own leaf");
         let mine: Vec<u32> = roster
             .iter()
-            .filter(|(_, identity)| *identity == agent.identity)
-            .map(|(index, _)| *index)
+            .filter(|leaf| leaf.identity == agent.identity)
+            .map(|leaf| leaf.index)
             .collect();
 
         eprintln!(
             "suite 0x{:04X}  resync: leaf {stale_leaf} -> {live_leaf}, tree {:?}, this identity \
              holds {mine:?}, members {} -> {}",
             suite.id(),
-            roster.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
+            roster.iter().map(|leaf| leaf.index).collect::<Vec<_>>(),
             before,
             roster.len(),
         );
@@ -443,9 +446,7 @@ fn test_resync_by_external_commit_when_it_names_another_members_leaf_then_the_gr
                     ),
                     Ok(_) => {
                         let roster = group.member_identities().expect("enumerate tree");
-                        let evicted = !roster
-                            .iter()
-                            .any(|(_, identity)| *identity == victim.identity);
+                        let evicted = !roster.iter().any(|leaf| leaf.identity == victim.identity);
 
                         panic!(
                             "on suite 0x{:04X} a stranger holding only a GroupInfo joined by \
@@ -544,7 +545,7 @@ fn test_resync_by_external_commit_when_the_handle_is_epochs_stale_then_its_leaf_
                 .member_identities()
                 .expect("enumerate")
                 .iter()
-                .map(|(index, _)| *index)
+                .map(|leaf| leaf.index)
                 .collect::<Vec<_>>(),
         );
 
@@ -576,8 +577,8 @@ fn test_resync_by_external_commit_when_the_handle_is_epochs_stale_then_its_leaf_
             .member_identities()
             .expect("enumerate tree")
             .into_iter()
-            .filter(|(_, identity)| *identity == agent.identity)
-            .map(|(index, _)| index)
+            .filter(|leaf| leaf.identity == agent.identity)
+            .map(|leaf| leaf.index)
             .collect();
 
         assert_eq!(

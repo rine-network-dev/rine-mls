@@ -7,6 +7,7 @@
 //! ```text
 //! groups/<hex group id>/state.bin        current group state
 //! groups/<hex group id>/epochs/<n>.bin   retained prior epochs
+//! groups/<hex group id>/floor            epoch the current state began at
 //! groups/<hex group id>/self_read.bin    plaintext of this member's own sends
 //! key_packages/<hex ref>.bin             private half of published KeyPackages
 //! ```
@@ -25,6 +26,7 @@
 //! collide because they do not share a name.
 
 mod files;
+mod floor;
 mod format;
 mod group_state;
 mod key_package;
@@ -42,6 +44,7 @@ use files::{
     write_private,
 };
 
+pub(crate) use floor::Incarnation;
 pub use group_state::FileGroupStateStorage;
 pub use key_package::FileKeyPackageStorage;
 pub use self_read::{SelfReadCache, SELF_READ_MAX_BYTES, SELF_READ_MAX_ENTRIES};

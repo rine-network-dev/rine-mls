@@ -1,4 +1,4 @@
-//! The raw ML-KEM-768 surface the `hpke-hybrid-v1` DM envelope is built from.
+//! The raw ML-KEM-768 surface the `hpke-hybrid-v2` DM envelope is built from.
 //!
 //! Cross-stack agreement with `@noble/post-quantum` is proven where it can
 //! actually be observed — the Python SDK decrypts committed TypeScript

@@ -1,4 +1,4 @@
-//! Raw ML-KEM-768, for rine's 1:1 `hpke-hybrid-v1` DM envelope.
+//! Raw ML-KEM-768, for rine's 1:1 `hpke-hybrid-v2` DM envelope.
 //!
 //! This is *not* the group KEM. Groups run X-Wing ([`crate::xwing`]), whose
 //! combiner and wire format are fixed by the X-Wing draft; the DM envelope
@@ -12,9 +12,11 @@
 //! `ml_kem768` produces, so a key minted by the TypeScript stack loads here and
 //! vice versa.
 //!
-//! Randomness enters at two points only — key generation and encapsulation —
-//! and both take it from the OS. Nothing here is derandomized: unlike X-Wing,
-//! no rine key material is expanded from a seed on this path.
+//! Randomness enters at two points — key generation and encapsulation — and
+//! both take it from the OS, except [`key_pair_from_seed`]: the org-root tree
+//! derives an agent's ML-KEM key from a 64-byte `d‖z` seed, and a Python SDK
+//! with no other seeded ML-KEM needs the same expansion `@noble/post-quantum`
+//! performs. Encapsulation is never derandomized.
 
 use libcrux_ml_kem::mlkem768;
 use rand_core::{OsRng, RngCore};
@@ -25,7 +27,8 @@ pub const PRIVATE_KEY_SIZE: usize = 2400;
 pub const CIPHERTEXT_SIZE: usize = 1088;
 pub const SHARED_SECRET_SIZE: usize = 32;
 
-const KEYGEN_SEED_SIZE: usize = 64;
+/// The FIPS 203 key-generation seed `d‖z`, `d` first (the ACVP layout).
+pub const KEYGEN_SEED_SIZE: usize = 64;
 const ENCAPS_SEED_SIZE: usize = 32;
 /// FIPS 203 §7.1 lays a private key out as `dk_PKE || ek || H(ek) || z`, so the
 /// public key and its hash sit at fixed offsets inside it.
@@ -43,6 +46,9 @@ pub enum MlKemError {
 
     #[error("ML-KEM-768 ciphertext must be {CIPHERTEXT_SIZE} bytes, got {0}")]
     CiphertextLength(usize),
+
+    #[error("ML-KEM-768 key-generation seed must be {KEYGEN_SEED_SIZE} bytes, got {0}")]
+    SeedLength(usize),
 
     #[error("ML-KEM-768 key is not a valid encoding")]
     MalformedKey,
@@ -93,10 +99,30 @@ fn wiped(mut key: mlkem768::MlKem768PrivateKey) -> Zeroizing<[u8; PRIVATE_KEY_SI
 
 /// Mint a key pair, as `(private_key, public_key)`.
 pub fn generate_key_pair() -> Result<(Zeroizing<[u8; PRIVATE_KEY_SIZE]>, [u8; PUBLIC_KEY_SIZE])> {
-    let seed = os_seed::<KEYGEN_SEED_SIZE>()?;
+    Ok(key_pair(&*os_seed::<KEYGEN_SEED_SIZE>()?))
+}
+
+/// The key pair FIPS 203 `ML-KEM.KeyGen_internal(d, z)` yields for the 64-byte
+/// seed `d‖z`, as `(private_key, public_key)`. The same seed always yields the
+/// same pair, and the private key is the 2400-byte expanded form the rest of
+/// this module takes.
+pub fn key_pair_from_seed(
+    seed: &[u8],
+) -> Result<(Zeroizing<[u8; PRIVATE_KEY_SIZE]>, [u8; PUBLIC_KEY_SIZE])> {
+    let seed: Zeroizing<[u8; KEYGEN_SEED_SIZE]> = Zeroizing::new(
+        seed.try_into()
+            .map_err(|_| MlKemError::SeedLength(seed.len()))?,
+    );
+
+    Ok(key_pair(&seed))
+}
+
+fn key_pair(
+    seed: &[u8; KEYGEN_SEED_SIZE],
+) -> (Zeroizing<[u8; PRIVATE_KEY_SIZE]>, [u8; PUBLIC_KEY_SIZE]) {
     let (sk, pk) = mlkem768::generate_key_pair(*seed).into_parts();
 
-    Ok((wiped(sk), *pk.as_slice()))
+    (wiped(sk), *pk.as_slice())
 }
 
 /// The public key a private key carries, checked against the `H(ek)` the

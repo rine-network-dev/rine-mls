@@ -70,6 +70,14 @@ impl FileKeyPackageStorage {
         Ok(refs)
     }
 
+    /// Whether the private half for `id` is held, answered from the file's
+    /// presence alone: the half is never decoded to be counted, and a damaged
+    /// file still counts as held, so it can be removed.
+    pub fn holds(&self, id: &[u8]) -> Result<bool> {
+        let path = self.path(id);
+        path.try_exists().map_err(|e| StoreError::io(&path, e))
+    }
+
     /// How many unconsumed KeyPackages this agent still holds the private half
     /// of. See [`Self::stored_refs`] for why this is read locally.
     pub fn count(&self) -> Result<usize> {

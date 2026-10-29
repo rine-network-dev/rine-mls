@@ -2,24 +2,43 @@
 // different slice of it, so per-binary dead-code warnings are expected here.
 #![allow(dead_code)]
 
+pub mod escrow;
+pub mod fixture;
+pub mod kept_store;
+pub mod member;
+pub mod rfc9420;
+pub mod rfc9420_seal;
+pub mod rotation;
 pub mod scale;
+pub mod seat;
+pub mod trio;
 pub mod unit_costs;
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use rine_mls_core::{
-    AgentSigningKey, MlsStoreRoot, RineCipherSuite, RineMlsClient, RineMlsOptions,
+    AllowedIdentities, LeafIdentity, MlsStoreRoot, RineCipherSuite, RineMlsClient, RineMlsOptions,
 };
 use tempfile::TempDir;
 
-/// One rine agent: its Ed25519 identity, its own private state directory, and a
-/// client over both. Agents never share a directory, exactly as they never
-/// share a process in production.
+/// The allowed set every test agent shares: each [`TestAgent`] adds its own
+/// pair on creation, standing in for an SDK that has chain-verified every
+/// agent the test makes.
+fn everyone() -> &'static AllowedIdentities {
+    static SET: OnceLock<AllowedIdentities> = OnceLock::new();
+
+    SET.get_or_init(AllowedIdentities::new)
+}
+
+/// One rine agent: its agent id and derived leaf key, its own private state
+/// directory, and a client over both. Agents never share a directory, exactly
+/// as they never share a process in production.
 pub struct TestAgent {
     pub client: RineMlsClient,
     pub identity: Vec<u8>,
-    key: AgentSigningKey,
+    leaf: LeafIdentity,
     store: PathBuf,
     suite: RineCipherSuite,
     options: RineMlsOptions,
@@ -39,8 +58,8 @@ impl TestAgent {
 
     /// A distinct agent per `index`, for cohorts wider than a seed byte can
     /// address. MLS refuses two leaves carrying the same basic-credential
-    /// identity, so a thousand-member group needs a thousand distinct signing
-    /// keys — [`TestAgent::new`]'s seed byte wraps at 256 and would build a
+    /// identity, so a thousand-member group needs a thousand distinct agent
+    /// ids — [`TestAgent::new`]'s seed byte wraps at 256 and would build a
     /// tree mls-rs rejects rather than a group of a thousand.
     pub fn indexed(index: u32, suite: RineCipherSuite) -> Self {
         let mut seed = [0xA5; 32];
@@ -52,12 +71,16 @@ impl TestAgent {
     fn seeded(seed: [u8; 32], suite: RineCipherSuite, options: RineMlsOptions) -> Self {
         let dir = tempfile::tempdir().expect("temp dir");
         let store = dir.path().join("mls2");
-        let key = AgentSigningKey::from_seed(&seed).expect("32-byte seed");
+        let agent_id = hex::encode(&seed[..8]).into_bytes();
+        let leaf = LeafIdentity::new(&agent_id, &seed).expect("32-byte seed");
+        everyone()
+            .insert(&agent_id, &leaf.leaf_public_key(), 0)
+            .expect("record the pair");
 
         Self {
-            client: open(&store, &key, suite, options),
-            identity: key.public_key().to_vec(),
-            key,
+            client: open(&store, &leaf, suite, options),
+            identity: agent_id,
+            leaf,
             store,
             suite,
             options,
@@ -68,13 +91,31 @@ impl TestAgent {
     /// A second client over the same on-disk state — what a restarted process
     /// sees. Nothing is carried over in memory.
     pub fn reopen(&self) -> RineMlsClient {
-        self.reopen_as(self.suite)
+        open(&self.store, &self.leaf, self.suite, self.options)
     }
 
-    /// The same agent and the same state directory, but a client built for a
-    /// different ciphersuite.
-    pub fn reopen_as(&self, suite: RineCipherSuite) -> RineMlsClient {
-        open(&self.store, &self.key, suite, self.options)
+    /// A second agent for the SAME agent id under a different leaf signing
+    /// seed: a rotated generation. The new leaf key is registered in the shared
+    /// allowed set alongside the old one, so both generations are accepted —
+    /// which is what a resync carrying a rotated key needs, and what a Welcome
+    /// validating a tree that holds the rotated leaf needs.
+    pub fn rotated(&self, new_seed_byte: u8) -> Self {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let store = dir.path().join("mls2");
+        let leaf = LeafIdentity::new(&self.identity, &[new_seed_byte; 32]).expect("32-byte seed");
+        everyone()
+            .insert(&self.identity, &leaf.leaf_public_key(), 0)
+            .expect("record the pair");
+
+        Self {
+            client: open(&store, &leaf, self.suite, self.options),
+            identity: self.identity.clone(),
+            leaf,
+            store,
+            suite: self.suite,
+            options: self.options,
+            _dir: dir,
+        }
     }
 
     pub fn store_path(&self) -> &Path {
@@ -84,17 +125,21 @@ impl TestAgent {
 
 fn open(
     store: &Path,
-    key: &AgentSigningKey,
+    leaf: &LeafIdentity,
     suite: RineCipherSuite,
     options: RineMlsOptions,
 ) -> RineMlsClient {
-    RineMlsClient::open_with(MlsStoreRoot::new(store), key, suite, options)
+    RineMlsClient::open_with(
+        MlsStoreRoot::new(store),
+        leaf,
+        everyone().clone(),
+        suite,
+        options,
+    )
 }
 
-/// Run a flow test once per ciphersuite rine speaks. The whole group flow has
-/// to hold on the post-quantum suite exactly as it does on the classical one —
-/// a suite that only works for key exchange in isolation is not a suite rine
-/// can ship. The suite is printed so a failure names which one broke.
+/// Run a flow test once per ciphersuite rine speaks (see `RineCipherSuite::ALL`). The suite is printed so a
+/// failure names which one broke.
 pub fn for_each_suite(test: impl Fn(RineCipherSuite)) {
     for suite in RineCipherSuite::ALL {
         eprintln!("--- cipher suite {suite:?} (0x{:04X}) ---", suite.id());

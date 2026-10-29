@@ -17,7 +17,7 @@
 //! default path, x509 credentials, and required-capabilities customization.
 //!
 //! One surface here is not MLS at all: [`mlkem`] exposes raw ML-KEM-768 for the
-//! 1:1 `hpke-hybrid-v1` DM envelope. It lives in this crate so rine has one
+//! 1:1 `hpke-hybrid-v2` DM envelope. It lives in this crate so rine has one
 //! post-quantum implementation to audit and update, not one for groups and a
 //! second for direct messages.
 //!
@@ -36,6 +36,7 @@
 // would have to notice.
 #![forbid(unsafe_code)]
 
+mod allowed;
 mod client;
 mod crypto;
 mod epoch;
@@ -44,6 +45,7 @@ mod ffi;
 mod frame;
 mod group;
 mod identity;
+pub mod mldsa;
 pub mod mlkem;
 mod policy;
 mod store;
@@ -51,16 +53,24 @@ mod suite;
 mod wire;
 pub mod xwing;
 
-pub use client::{RineMlsClient, RineMlsConfig, RineMlsOptions};
+pub use allowed::{AllowedIdentities, AllowedSetIdentityProvider, IdentityError};
+pub use client::{key_package_signature_key, RineMlsClient, RineMlsConfig, RineMlsOptions};
 pub use crypto::{
     RineCipherSuiteProvider, RineCryptoError, RineCryptoProvider, RineKemError, XWING_KEM_ID,
 };
 pub use epoch::wire_epoch;
-pub use error::{MlsBlobKind, Result, RineMlsError, RineMlsErrorCode};
+pub use error::{
+    EscrowFault, LeafUpdateFault, MlsBlobKind, Result, RineMlsError, RineMlsErrorCode,
+};
 pub use ffi::{Guarded, PanicGuard};
 pub use frame::APP_MESSAGE_TAG;
-pub use group::{AppMessage, CommitBundle, RineMlsGroup};
-pub use identity::AgentSigningKey;
+pub use group::{
+    fingerprint, AppMessage, CommitBundle, EpochFingerprint, EpochReader, EscrowBacklog,
+    EscrowExport, EscrowGap, EscrowGapReason, EscrowTake, MemberLeaf, OpenedMessage, RineMlsGroup,
+    FINGERPRINT_LEN, MAX_CONTEXT_LEN, MAX_DROPPED_EPOCH_READ_EPOCHS, MAX_LEAVES,
+    MAX_QUEUED_EPOCH_READ_EXPORTS,
+};
+pub use identity::LeafIdentity;
 pub use policy::{
     key_package_shortfall, EpochRetention, EPOCH_RETENTION_DEFAULT, KEY_PACKAGE_LOW_WATER,
     KEY_PACKAGE_MAX_BATCH, KEY_PACKAGE_TARGET, MESSAGE_RETENTION_DAYS,

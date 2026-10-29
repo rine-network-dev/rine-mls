@@ -8,8 +8,9 @@ use std::path::Path;
 
 use tempfile::TempDir;
 
+use crate::allowed::AllowedIdentities;
 use crate::client::RineMlsClient;
-use crate::identity::AgentSigningKey;
+use crate::identity::LeafIdentity;
 use crate::store::MlsStoreRoot;
 use crate::suite::RineCipherSuite;
 
@@ -23,8 +24,9 @@ use crate::suite::RineCipherSuite;
 fn test_add_only_commit_carries_an_update_path() {
     for suite in RineCipherSuite::ALL {
         let dir = tempfile::tempdir().expect("temp dir");
-        let alice = open(&dir, "alice", 1, suite);
-        let bob = open(&dir, "bob", 2, suite);
+        let allowed = AllowedIdentities::new();
+        let alice = open(&dir, "alice", 1, &allowed, suite);
+        let bob = open(&dir, "bob", 2, &allowed, suite);
 
         let (mut group, _) = alice.create_group(&[0xC1; 16]).expect("create group");
         let key_package = bob.generate_key_package().expect("key package");
@@ -40,9 +42,18 @@ fn test_add_only_commit_carries_an_update_path() {
     }
 }
 
-fn open(dir: &TempDir, name: &str, seed_byte: u8, suite: RineCipherSuite) -> RineMlsClient {
+fn open(
+    dir: &TempDir,
+    name: &str,
+    seed_byte: u8,
+    allowed: &AllowedIdentities,
+    suite: RineCipherSuite,
+) -> RineMlsClient {
     let store: &Path = &dir.path().join(name);
-    let key = AgentSigningKey::from_seed(&[seed_byte; 32]).expect("32-byte seed");
+    let leaf = LeafIdentity::new(name.as_bytes(), &[seed_byte; 32]).expect("32-byte seed");
+    allowed
+        .insert(name.as_bytes(), &leaf.leaf_public_key(), 0)
+        .expect("record the pair");
 
-    RineMlsClient::open(MlsStoreRoot::new(store), &key, suite)
+    RineMlsClient::open(MlsStoreRoot::new(store), &leaf, allowed.clone(), suite)
 }

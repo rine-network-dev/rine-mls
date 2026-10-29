@@ -20,8 +20,15 @@ def main() -> None:
         root = Path(store)
         suite = rine_mls.CIPHER_SUITE_DEFAULT
 
-        alice = rine_mls.MlsClient(str(root / "alice"), secrets.token_bytes(32), suite)
-        bob = rine_mls.MlsClient(str(root / "bob"), secrets.token_bytes(32), suite)
+        allowed = rine_mls.AllowedIdentities()
+        alice, bob = (
+            rine_mls.MlsClient(
+                str(root / name), name.encode(), secrets.token_bytes(32), allowed, suite
+            )
+            for name in ("alice", "bob")
+        )
+        for client in (alice, bob):
+            allowed.insert(client.agent_id(), client.leaf_public_key(), 0)
 
         assert not hasattr(alice, "panic_probe"), "the published wheel must not carry the probe"
 

@@ -1,4 +1,4 @@
-"""The whole group contract, driven from Python on both ciphersuites.
+"""The whole group contract, driven from Python on the post-quantum suite.
 
 This is the surface the Python SDK will call: found a group with its members in
 one commit, join by Welcome and by external commit, exchange application
@@ -68,7 +68,7 @@ def test_group_lifecycle_when_driven_from_python_round_trips(make_agent, suite):
 
     # --- eviction ------------------------------------------------------------
     backlog = alice_group.encrypt_application_message(b"last one carol sees")
-    removal = alice_group.remove_member(alice_group.member_index(carol_client.public_key()))
+    removal = alice_group.remove_member(alice_group.member_index(carol_client.agent_id()))
 
     assert removal.epoch == 3
     assert carol_group.apply_commit(removal.commit) == 2, "an evicted member gets no new epoch"
@@ -162,11 +162,11 @@ def test_tree_enumeration_and_resync_when_driven_from_python_hold(make_agent, su
         )
 
     assert sorted(m.identity for m in tree) == sorted(
-        c.public_key() for c in (alice, bob, carol)
+        c.agent_id() for c in (alice, bob, carol)
     ), "the identities are the members' public keys"
 
     for group, client in ((alice_group, alice), (bob_group, bob)):
-        assert group.current_member_index() == group.member_index(client.public_key()), (
+        assert group.current_member_index() == group.member_index(client.agent_id()), (
             "a handle must agree with itself about which leaf it occupies"
         )
 
@@ -186,7 +186,7 @@ def test_tree_enumeration_and_resync_when_driven_from_python_hold(make_agent, su
 
     after = resynced.member_identities()
     assert len(after) == len(tree), "a resync does not change the membership count"
-    assert [m.index for m in after if m.identity == bob.public_key()] == [
+    assert [m.index for m in after if m.identity == bob.agent_id()] == [
         resynced.current_member_index()
     ], "the stale leaf is replaced, not doubled"
 

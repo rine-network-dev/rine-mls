@@ -10,7 +10,7 @@ use mls_rs::{KeyPackageRef, MlsMessage};
 use mls_rs_core::crypto::CryptoProvider;
 
 use crate::crypto::RineCryptoProvider;
-use crate::error::{Result, RineMlsError};
+use crate::error::{LeafUpdateFault, Result, RineMlsError};
 use crate::wire;
 
 use super::RineMlsGroup;
@@ -119,12 +119,14 @@ impl RineMlsGroup {
         let commit = output.commit_message.to_bytes()?;
         let welcomes = welcomes_in_add_order(added, &output.welcome_messages)?;
 
+        let group_info = next_group_info(&output)?;
+
         self.inner.apply_pending_commit()?;
 
         Ok(CommitBundle {
             commit,
             welcomes,
-            group_info: self.group_info()?,
+            group_info,
             epoch: self.epoch(),
         })
     }
@@ -147,6 +149,18 @@ impl RineMlsGroup {
             })
             .collect()
     }
+}
+
+/// The GroupInfo of the epoch a built commit creates, which the commit's own
+/// output carries because the rules ask for it. Read from the output, not from
+/// the group, so it exists before the commit is applied.
+pub(super) fn next_group_info(output: &CommitOutput) -> Result<Vec<u8>> {
+    let group_info = output
+        .external_commit_group_info
+        .as_ref()
+        .ok_or(LeafUpdateFault::MissingGroupInfo)?;
+
+    Ok(group_info.to_bytes()?)
 }
 
 /// Pair each added member with its own Welcome.

@@ -11,7 +11,8 @@ use super::RineMlsGroup;
 
 /// A decrypted MLS application message. The payload is the signed rine
 /// envelope: MLS wraps it, but the inner Ed25519 signature is what actually
-/// authenticates the sender, because the MLS credential layer is accept-all.
+/// authenticates the sender: the MLS credential layer only vouches that the leaf
+/// is one the client was told to allow.
 #[derive(Debug, Clone)]
 pub struct AppMessage {
     pub envelope: Vec<u8>,

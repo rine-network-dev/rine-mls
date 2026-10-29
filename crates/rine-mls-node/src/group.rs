@@ -20,9 +20,11 @@ use crate::types::{
 /// a rejected commit leaves no forked state behind.
 #[napi]
 pub struct MlsGroup {
-    inner: RineMlsGroup,
+    /// `pub(crate)` for the sibling modules that add methods to this handle.
+    pub(crate) inner: RineMlsGroup,
     last_commit: Option<rine_mls_core::CommitBundle>,
-    /// `pub(crate)` only so the `panic-probe` module can trip it deliberately.
+    /// `pub(crate)` so a sibling module can trip it deliberately (the
+    /// `panic-probe` feature) or read what it recorded.
     pub(crate) poison: PanicGuard,
 }
 
@@ -73,8 +75,8 @@ impl MlsGroup {
         guard(&mut self.poison, || Ok(inner.is_active()))
     }
 
-    /// Leaf index of the member whose basic-credential identity (its raw
-    /// Ed25519 public key) is `identity` — the input to [`Self::remove_member`].
+    /// Leaf index of the member whose basic-credential identity (its agent id
+    /// bytes) is `identity` — the input to [`Self::remove_member`].
     #[napi]
     pub fn member_index(&mut self, identity: Uint8Array) -> Result<u32, MlsError> {
         let inner = &self.inner;
@@ -198,7 +200,7 @@ impl MlsGroup {
         guard(&mut self.poison, || inner.save())
     }
 
-    fn commit(
+    pub(crate) fn commit(
         &mut self,
         build: impl FnOnce(&mut RineMlsGroup) -> Result<rine_mls_core::CommitBundle, RineMlsError>,
     ) -> Result<CommitBundle, MlsError> {

@@ -6,6 +6,7 @@ use zeroize::Zeroizing;
 
 use crate::policy::EpochRetention;
 
+use super::floor::StagedGroups;
 use super::{
     create_private_dir, read_optional_framed, remove_if_present, write_framed, MlsStoreRoot,
     Result, StoreError,
@@ -18,10 +19,14 @@ use super::{
 /// epoch from storage itself and its own repository defers to storage for
 /// anything not in the pending commit, so the retention set here is the whole
 /// of the policy — nothing upstream trims underneath it.
+///
+/// Each group directory may also hold an incarnation floor, and a new state of
+/// a group is staged until its first save; both live in `store/floor.rs`.
 #[derive(Debug, Clone)]
 pub struct FileGroupStateStorage {
-    root: MlsStoreRoot,
+    pub(super) root: MlsStoreRoot,
     retention: EpochRetention,
+    pub(super) staged: StagedGroups,
 }
 
 impl FileGroupStateStorage {
@@ -31,7 +36,11 @@ impl FileGroupStateStorage {
     }
 
     pub fn with_retention(root: MlsStoreRoot, retention: EpochRetention) -> Self {
-        Self { root, retention }
+        Self {
+            root,
+            retention,
+            staged: StagedGroups::default(),
+        }
     }
 
     fn state_path(&self, group_id: &[u8]) -> PathBuf {
@@ -42,12 +51,12 @@ impl FileGroupStateStorage {
         self.root.group_dir(group_id).join("epochs")
     }
 
-    fn epoch_path(&self, group_id: &[u8], epoch_id: u64) -> PathBuf {
+    pub(super) fn epoch_path(&self, group_id: &[u8], epoch_id: u64) -> PathBuf {
         self.epochs_dir(group_id).join(format!("{epoch_id}.bin"))
     }
 
     /// Epoch ids currently on disk, oldest first.
-    fn stored_epochs(&self, group_id: &[u8]) -> Result<Vec<u64>> {
+    pub(super) fn stored_epochs(&self, group_id: &[u8]) -> Result<Vec<u64>> {
         let dir = self.epochs_dir(group_id);
 
         let entries = match fs::read_dir(&dir) {
@@ -143,6 +152,6 @@ impl GroupStateStorage for FileGroupStateStorage {
     }
 
     fn max_epoch_id(&self, group_id: &[u8]) -> Result<Option<u64>> {
-        Ok(self.stored_epochs(group_id)?.last().copied())
+        self.visible_max_epoch_id(group_id)
     }
 }

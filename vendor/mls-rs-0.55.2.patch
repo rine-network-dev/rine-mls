@@ -1,0 +1,1065 @@
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/PATCH.md b/rine-mls/vendor/mls-rs-0.55.2/PATCH.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..2efa7f7a25f1ee68b9bed3e1fb71a072c0f98c50
+--- /dev/null
++++ b/rine-mls/vendor/mls-rs-0.55.2/PATCH.md
+@@ -0,0 +1,175 @@
++# rine patch to mls-rs 0.55.2
++
++This directory is `mls-rs` 0.55.2 as published on crates.io (upstream commit
++`42131c9959efb1d3928428259bc89853027f730d`, see `.cargo_vcs_info.json`), under its original
++Apache-2.0 / MIT licences (`LICENSE-apache`, `LICENSE-mit`, fetched from that commit because the
++crates.io package omits them). The workspace builds it through `[patch.crates-io]` in
++`rine-mls/Cargo.toml`; the version stays 0.55.2, so the exact `=0.55.2` pin still binds. The
++directory is excluded from the cargo workspace (`exclude = ["vendor"]`), so its own tests and lints
++are not part of rine's gates.
++
++Pristine crate SHA-256 (crates.io `mls-rs-0.55.2.crate`, 275,928 bytes): `94cfaf16b4887985489acc3847fd94c2bb5025d87d5d0a4928105fe16c7f1b3a`
++(`scripts/check-vendor-patch.sh` hashes the cached crate against this pin and compares its unpacked tree with the
++pristine commit.)
++
++The pristine tree is the commit `build(rine-mls): vendor pristine mls-rs 0.55.2`; the patch is the
++diff on top of it (`git diff <that commit> -- rine-mls/vendor/mls-rs-0.55.2`). Nothing outside the
++files below changed.
++
++## Why
++
++rine's org can read the closed groups its agents sit in, one epoch at a time, from a per-epoch
++escrow that holds the two secrets that decrypt a PrivateMessage and the public data needed to check
++its signature. Upstream mls-rs offers none of this: the secret tree consumes its root on the first
++leaf derivation, so the secrets cannot be read after a message was processed; the ciphertext
++processor is crate-private; and it checks the AEAD only.
++
++## What changed
++
++1. `src/group/epoch_read.rs` (new). `EpochReadSecrets`: the epoch's `GroupContext`, leaf count,
++   `sender_data_secret`, the secret-tree root (`encryption_secret`), the `epoch_authenticator` and
++   the signature public key of every non-empty leaf. Secrets are `Zeroizing`; `Debug` prints the
++   epoch only. It holds none of `epoch_secret`, `init_secret`, `exporter_secret`,
++   `membership_key`, `confirmation_key`, `resumption_secret` or any private key, so it can open
++   messages and cannot advance the group or sign. `EpochReadExports` is the crate-private list of
++   untaken exports.
++
++2. Capture at epoch **installation**, not at key derivation. `from_epoch_secret` also runs for
++   epochs that are never installed (a received commit refused with `InvalidConfirmationTag`, an own
++   commit built and then cleared, a Welcome that fails its checks), so the export is pushed only
++   where a group takes an epoch. The four sites in `src/group/mod.rs`, by function:
++   - `Group::new`, group creation;
++   - `join_with`, reached by a Welcome and by the external joiner's placeholder. The placeholder's
++     secret tree is empty (`SecretTree::is_placeholder`) and is skipped; the joiner's real epoch is
++     installed when its own commit applies;
++   - `apply_detached_commit` (behind `apply_pending_commit`), which covers own commits, external
++     commits and resyncs;
++   - `update_key_schedule`, the received-commit path, after the confirmation tag checks.
++   The root is read through `SecretTree::unconsumed_root` before any `consume_node`. If the root of
++   a real tree was already consumed the install fails with the new
++   `MlsError::EpochReadSecretsConsumed` instead of skipping. At the two sites that archive the
++   outgoing epoch (`apply_detached_commit`, `update_key_schedule`) the export is captured first, then
++   `insert_past_epoch` runs, then the export is pushed, so a failure in between leaves the list
++   untouched.
++
++3. `Group::take_epoch_read_exports()` returns the exports installed since the last call, oldest
++   first, and empties the list. It returns `(exports, dropped)`: the list is capped at
++   `MAX_QUEUED_EPOCH_READ_EXPORTS` (32, the Welcomes one commit may carry), so a caller that cannot
++   seal (no verified escrow key) does not pile epoch secrets into the snapshot without bound. A push
++   past the cap discards the OLDEST export and records only its epoch in `dropped` (8 bytes, not a
++   secret), which the same take returns and empties. `Group::epoch_read_backlog()` reports
++   `(queued, dropped)` counts without taking. `dropped` is a second trailing vector in the same
++   snapshot section, itself capped at `MAX_DROPPED_EPOCH_READ_EPOCHS` (1024, the newest kept) so a
++   deferral that never ends cannot grow the snapshot without bound; a section written before it
++   existed decodes with none. The list is a trailing section of the group `Snapshot`
++   (`src/group/snapshot.rs`), so a snapshot written between install and take holds the exports and
++   a crash loses nothing. A snapshot written by an unpatched mls-rs has no such section and decodes
++   as an empty list (`EpochReadExports::mls_decode` accepts an exhausted reader). The `Snapshot`
++   `version` stays 1. The `Group` field and the snapshot wiring are not feature-gated; `snapshot.rs`
++   also gives the test-only `Default` for `Snapshot` an empty list.
++
++   Rolling back to pristine mls-rs: upstream `Snapshot::mls_decode` ignores trailing bytes, so a
++   state file written by the patched crate loads, and the exports not yet taken are silently
++   dropped. Call `take_epoch_read_exports` and persist its result before swapping the crate out.
++
++4. `src/group/epoch_reader.rs` (new). `EpochReader<P>` rebuilds a `PriorEpoch` from the escrowed
++   secrets, with `self_index` `u32::MAX`, and runs the crate's own `CiphertextProcessor` and
++   `verify_auth_content_signature` on it. `open` returns the application data, sender leaf and
++   generation, and `EpochReadError::Rejected` for a message whose AEAD opens but whose framing
++   signature does not verify under the key recorded for the leaf its sender data names. No decrypt
++   or signature logic is reimplemented.
++   - `self_index = u32::MAX`: `CiphertextProcessor::open` refuses a sender equal to the provider's
++     own index, and every real leaf index is smaller, so a message from leaf 0 opens.
++   - Forward step: a fresh reader starts every leaf ratchet at generation 0, and mls-rs refuses a
++     generation more than `MAX_RATCHET_BACK_HISTORY` (1024) ahead. `SecretTree::skip_forward`
++     (`src/group/secret_tree.rs`) steps the sender's ratchet with the crate's own
++     `next_message_key` until the target is within 1024, without adding the stepped keys to the
++     out-of-order history. Generations within 1024 are handled by the normal path, so messages of
++     one sender may be opened out of order inside that window.
++   - Reach: a generation more than `MAX_READER_SKIP` (65,536, re-exported from `src/group/mod.rs`)
++     steps beyond that window is refused with `EpochReadError::GenerationTooFar`, before any
++     ratchet step, so a member cannot make a reader spin by naming a huge generation.
++   - Only application content is opened: any other content type is refused before the ratchet
++     moves.
++   - `OpenedMessage` carries `signer_public_key`, the leaf key the framing signature verified
++     under, so a caller can compare it with the key chain-verified for the agent the envelope names.
++
++5. `src/group/secret_tree.rs`: `TreeSecretsVec::node`, `SecretTree::{is_placeholder, leaf_count,
++   unconsumed_root, skip_forward}`, `SecretRatchets::skip_forward`,
++   `SecretKeyRatchet::skip_forward`.
++
++6. `src/client.rs`: `MlsError::EpochReadSecretsConsumed`.
++
++7. `src/group/mod.rs`: modules `epoch_read` and `epoch_reader`, the re-exports `EpochReadSecrets`,
++   `EpochReader`, `EpochReadError` and `OpenedMessage`, and the `epoch_read_exports` field.
++   `EpochReader` needs the `prior_epoch` and `private_message` features, which rine's
++   `rfc_compliant` set includes.
++
++8. `src/group/mod.rs`: `Group::signer_public_key()` derives the public half of the key the member's
++   next frame is signed with. The upstream group exposes the signing identity on its leaf but not
++   the key it actually signs with, and the two differ after `set_new_signing_identity` is applied
++   by a handle that was installed from an older KeyPackage. rine reads it to refuse an update
++   whose framing signature no receiver could verify.
++
++9. `src/group/util.rs`, `src/group/mod.rs`: `validate_sender_signature_key_from_prior_epoch` is
++   successor-aware. Upstream refuses a prior-epoch private message whenever the sender's leaf key
++   in the current tree differs from the key it held in that epoch, which also refuses the sender's
++   own messages after a self-update, because the rotation replaced the key. `PriorEpoch` stores no
++   credentials, so the check cannot name who held the epoch's key. The patch uses the current
++   leaf's credential as the hypothesis: the message opens when the current leaf carries the same
++   key, or when the identity provider's `valid_successor` accepts the current leaf as a successor
++   of that credential holding the epoch's key. rine's allowed-set provider decides it, and it
++   accepts only a strictly newer chain-verified generation of the same agent. A blank leaf (a
++   removed sender) and a leaf another agent now holds still return `MemberNotFound`, so nothing is
++   attributed to whoever reuses the index. The framing signature is still verified against the
++   epoch's key before this check runs. Both call sites (`prior_epoch_membership_key` and the
++   private-message path) pass `&self.config.identity_provider()` and
++   `&self.state.context.extensions`. The patch is safe only under a key-aware `valid_successor`: a
++   credential-only provider (stock `BasicIdentityProvider`) accepts a leaf reused by another
++   identity. The pin is `RineMlsConfig` (`rine-mls-core/src/client/mod.rs`), which names
++   `AllowedSetIdentityProvider` concretely, so every rine client is built with it and a second
++   provider cannot be wired without changing that type.
++
++## Known limit
++
++The cap is `MAX_READER_SKIP` ratchet steps per `open`, a fixed number rather than a parameter. A
++reader that wants a tighter bound than 65,536 + 1024 generations must check the generation itself
++before calling `open`.
++
++## Upgrading mls-rs
++
++Re-vendor the new release, re-apply this patch, update this file, and re-run the per-site mutation
++proof: removing the export at any one of the four install sites must turn the test in the right
++column red (all in `rine-mls-core/tests/escrow_exports.rs`).
++
++| Site | Test that must go red |
++|---|---|
++| `Group::new` | `test_install_site_create_when_a_group_is_founded_exports_epoch_zero` |
++| `join_with` | `test_install_site_welcome_when_a_member_joins_exports_only_the_joined_epoch` |
++| `apply_detached_commit` | `test_install_site_own_commit_when_a_member_is_added_exports_the_new_epoch` |
++| `update_key_schedule` | `test_install_site_received_commit_when_a_member_applies_it_exports_the_new_epoch` |
++
++Item 9 is proven the same way, in `rine-mls-core/tests/prior_epoch_messages.rs`: deleting the
++`valid_successor` branch must turn `test_decrypt_when_sender_self_updated_after_sending_then_opens`
++red, and deleting the call in `src/group/mod.rs` must turn the removed-sender and reused-leaf
++tests red. The equal-or-older generation, newer-claim and other-agent refusals are pinned by the
++`test_decrypt_when_epoch_key_*` tests in the same file (accepting any `Ok(_)` from `valid_successor`
++turns the equal and newer-generation ones red).
++
++Upstream's `test_messages_from_prior_epoch_aliased_key_not_processed` cannot run offline (its
++dev-dependency crypto provider is not in the cargo registry), and ported onto the cached rustcrypto
++provider with the stock `BasicIdentityProvider` it does NOT pass under this patch: the stock
++`valid_successor` compares credential identities only, the check builds the predecessor from the
++current leaf's credential, so a leaf reused by another agent is accepted and both the prior-epoch
++decrypt and `validate_custom_proposal` open (the unpatched crate refuses both with `MemberNotFound`).
++The patch is therefore only safe under an identity provider whose `valid_successor` also decides on
++the keys, as rine's allowed-set provider does; rine's reused-leaf test covers the same shape under
++that provider. Treat the upstream test as unverified and known to differ under a credential-only
++provider.
++
++`EpochReadSecrets` is serialised twice: by the MLS codec in the snapshot (`epoch_read.rs`) and by the
++hand-written escrow plaintext v1 codec in `rine-mls-core/src/group/escrow/plaintext.rs`, which reads
++the accessors one by one. A field added to `EpochReadSecrets` is dropped from the escrow silently
++unless the plaintext codec, its version tag and the KAT generator
++(`scripts/vectors/sections/escrow.mjs`) change with it; `test_install_site_layout_when_decoded_by_hand_matches_the_epoch`
++fails on a reordered or resized field. Upstreaming is tracked separately.
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/client.rs b/rine-mls/vendor/mls-rs-0.55.2/src/client.rs
+index 52ddb8bbe99aafb0808dd1d8e4873cea9afc86a1..b27674029b7a5f64d30e787fa1594507a5d5c9bc 100644
+--- a/rine-mls/vendor/mls-rs-0.55.2/src/client.rs
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/client.rs
+@@ -176,6 +176,11 @@ pub enum MlsError {
+     OldGroupStateNotFound,
+     #[cfg_attr(feature = "std", error("leaf secret already consumed"))]
+     InvalidLeafConsumption,
++    #[cfg_attr(
++        feature = "std",
++        error("the secret tree root was consumed before the epoch read secrets were exported")
++    )]
++    EpochReadSecretsConsumed,
+     #[cfg_attr(feature = "std", error("key not available, invalid generation {0}"))]
+     KeyMissing(u32),
+     #[cfg_attr(
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/group/epoch_read.rs b/rine-mls/vendor/mls-rs-0.55.2/src/group/epoch_read.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..8e6c06938037702f894fea339f2a3de4f9a96690
+--- /dev/null
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/group/epoch_read.rs
+@@ -0,0 +1,197 @@
++// rine patch, described in PATCH.md: not part of upstream mls-rs 0.55.2.
++
++use alloc::vec::Vec;
++use core::fmt::{self, Debug};
++
++use mls_rs_codec::{MlsDecode, MlsEncode, MlsSize};
++use zeroize::Zeroizing;
++
++use super::{epoch::EpochSecrets, key_schedule::KeySchedule, GroupContext};
++use crate::{client::MlsError, tree_kem::TreeKemPublic};
++
++/// The signature public key of one occupied leaf.
++#[derive(Clone, Debug, PartialEq, MlsSize, MlsEncode, MlsDecode)]
++struct LeafSignatureKey {
++    leaf_index: u32,
++    #[mls_codec(with = "mls_rs_codec::byte_vec")]
++    key: Vec<u8>,
++}
++
++/// What a reader that is not a member needs to open every PrivateMessage of one
++/// epoch and to check the framing signatures: the two secrets that decrypt, the
++/// epoch's public context and leaf signature keys, and the epoch authenticator
++/// (public to members) that tells two forks of an epoch apart.
++///
++/// Captured when an epoch is installed, before any message is processed, because
++/// the secret tree consumes its root on the first leaf derivation. Holds neither
++/// `epoch_secret`, `init_secret`, `exporter_secret`, `membership_key`,
++/// `confirmation_key`, `resumption_secret` nor any private key, so it cannot
++/// advance the group or sign anything.
++#[derive(Clone, PartialEq, MlsSize, MlsEncode, MlsDecode)]
++pub struct EpochReadSecrets {
++    group_context: GroupContext,
++    leaf_count: u32,
++    #[mls_codec(with = "mls_rs_codec::byte_vec")]
++    sender_data_secret: Zeroizing<Vec<u8>>,
++    #[mls_codec(with = "mls_rs_codec::byte_vec")]
++    encryption_secret: Zeroizing<Vec<u8>>,
++    #[mls_codec(with = "mls_rs_codec::byte_vec")]
++    epoch_authenticator: Zeroizing<Vec<u8>>,
++    leaf_signature_keys: Vec<LeafSignatureKey>,
++}
++
++impl Debug for EpochReadSecrets {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("EpochReadSecrets")
++            .field("epoch", &self.group_context.epoch)
++            .finish()
++    }
++}
++
++impl EpochReadSecrets {
++    /// Called at every place a group assigns `epoch_secrets`, with the state of the epoch being
++    /// installed and before the install changes anything.
++    ///
++    /// `Ok(None)` for the placeholder epoch of an external committer, whose
++    /// secret tree is empty; its real epoch is exported when its commit applies.
++    /// An error if the root of a real tree was already consumed.
++    pub(crate) fn capture(
++        key_schedule: &KeySchedule,
++        secrets: &EpochSecrets,
++        context: &GroupContext,
++        tree: &TreeKemPublic,
++    ) -> Result<Option<Self>, MlsError> {
++        if secrets.secret_tree.is_placeholder() {
++            return Ok(None);
++        }
++
++        let root = secrets
++            .secret_tree
++            .unconsumed_root()
++            .ok_or(MlsError::EpochReadSecretsConsumed)?;
++
++        Ok(Some(Self {
++            group_context: context.clone(),
++            leaf_count: *secrets.secret_tree.leaf_count(),
++            sender_data_secret: Zeroizing::new(secrets.sender_data_secret.to_vec()),
++            encryption_secret: Zeroizing::new(root.to_vec()),
++            epoch_authenticator: key_schedule.authentication_secret.clone(),
++            leaf_signature_keys: tree
++                .non_empty_leaves()
++                .map(|(index, leaf)| LeafSignatureKey {
++                    leaf_index: *index,
++                    key: leaf.signing_identity.signature_key.to_vec(),
++                })
++                .collect(),
++        }))
++    }
++
++    pub fn group_context(&self) -> &GroupContext {
++        &self.group_context
++    }
++
++    /// Leaves in the ratchet tree at this epoch, empty ones included.
++    pub fn leaf_count(&self) -> u32 {
++        self.leaf_count
++    }
++
++    pub fn sender_data_secret(&self) -> &[u8] {
++        &self.sender_data_secret
++    }
++
++    /// The secret-tree root.
++    pub fn encryption_secret(&self) -> &[u8] {
++        &self.encryption_secret
++    }
++
++    pub fn epoch_authenticator(&self) -> &[u8] {
++        &self.epoch_authenticator
++    }
++
++    /// `(leaf index, signature public key)` of every non-empty leaf.
++    pub fn leaf_signature_keys(&self) -> impl Iterator<Item = (u32, &[u8])> {
++        self.leaf_signature_keys
++            .iter()
++            .map(|leaf| (leaf.leaf_index, leaf.key.as_slice()))
++    }
++}
++
++/// The most untaken exports a group keeps. Each holds an epoch's unconsumed
++/// `encryption_secret`, so the cap bounds how many epochs sit readable in the
++/// stored snapshot while the caller cannot seal them. 32 is the number of
++/// Welcomes one commit may carry, far above the one export per installed epoch
++/// a drain normally leaves.
++pub const MAX_QUEUED_EPOCH_READ_EXPORTS: usize = 32;
++
++/// The most discarded epochs a group remembers. Past it the oldest record is
++/// forgotten, so a deferral that never ends cannot grow the snapshot without
++/// bound; the epoch still has no escrow, which every reader reports as missing.
++pub const MAX_DROPPED_EPOCH_READ_EPOCHS: usize = 1024;
++
++/// Exports captured since the last [`Group::take_epoch_read_exports`], persisted
++/// in their own section of the group snapshot so a crash between install and
++/// take loses nothing. A snapshot written before this section existed decodes as
++/// empty.
++///
++/// At most [`MAX_QUEUED_EPOCH_READ_EXPORTS`] are kept: the oldest is discarded
++/// when a new one arrives past the cap, and only its epoch is remembered
++/// (`dropped`, itself capped at [`MAX_DROPPED_EPOCH_READ_EPOCHS`]), so the caller
++/// can still record that the epoch was lost. A snapshot written before `dropped`
++/// existed decodes with none.
++///
++/// [`Group::take_epoch_read_exports`]: super::Group::take_epoch_read_exports
++#[derive(Clone, Debug, Default, PartialEq, MlsSize, MlsEncode)]
++pub(crate) struct EpochReadExports {
++    queued: Vec<EpochReadSecrets>,
++    dropped: Vec<u64>,
++}
++
++impl MlsDecode for EpochReadExports {
++    fn mls_decode(reader: &mut &[u8]) -> Result<Self, mls_rs_codec::Error> {
++        if reader.is_empty() {
++            return Ok(Self::default());
++        }
++
++        let queued = Vec::mls_decode(reader)?;
++        let dropped = if reader.is_empty() {
++            Vec::new()
++        } else {
++            Vec::mls_decode(reader)?
++        };
++
++        Ok(Self { queued, dropped })
++    }
++}
++
++impl EpochReadExports {
++    /// Queues the export captured for an epoch. Call it only once the epoch is installed:
++    /// [`EpochReadSecrets::capture`] first, then every fallible step of the install, then
++    /// this, so a failed install leaves nothing queued.
++    pub(crate) fn push(&mut self, export: Option<EpochReadSecrets>) {
++        let Some(export) = export else { return };
++
++        if self.queued.len() >= MAX_QUEUED_EPOCH_READ_EXPORTS {
++            let oldest = self.queued.remove(0);
++
++            if self.dropped.len() >= MAX_DROPPED_EPOCH_READ_EPOCHS {
++                self.dropped.remove(0);
++            }
++
++            self.dropped.push(oldest.group_context().epoch);
++        }
++
++        self.queued.push(export);
++    }
++
++    pub(crate) fn take(&mut self) -> (Vec<EpochReadSecrets>, Vec<u64>) {
++        (
++            core::mem::take(&mut self.queued),
++            core::mem::take(&mut self.dropped),
++        )
++    }
++
++    /// `(queued, dropped)` counts, without taking.
++    pub(crate) fn backlog(&self) -> (usize, usize) {
++        (self.queued.len(), self.dropped.len())
++    }
++}
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/group/epoch_reader.rs b/rine-mls/vendor/mls-rs-0.55.2/src/group/epoch_reader.rs
+new file mode 100644
+index 0000000000000000000000000000000000000000..85e12f07ff739a1778c9c1f10dd94be683f9c6c3
+--- /dev/null
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/group/epoch_reader.rs
+@@ -0,0 +1,219 @@
++// rine patch, described in PATCH.md: not part of upstream mls-rs 0.55.2.
++
++use alloc::vec::Vec;
++
++use mls_rs_core::crypto::{CipherSuiteProvider, SignaturePublicKey};
++
++use super::{
++    ciphertext_processor::CiphertextProcessor,
++    epoch::{EpochSecrets, PriorEpoch},
++    framing::Content,
++    message_verifier::{verify_auth_content_signature, SignaturePublicKeysContainer},
++    secret_tree::{KeyType, SecretTree},
++    GroupContext,
++};
++use crate::{client::MlsError, tree_kem::node::LeafIndex, MlsMessage};
++
++#[cfg(feature = "psk")]
++use crate::psk::PreSharedKey;
++
++/// Why [`EpochReader::open`] returned no message.
++#[derive(Debug)]
++#[cfg_attr(feature = "std", derive(thiserror::Error))]
++pub enum EpochReadError {
++    /// The AEAD opened, but the framing signature does not verify under the key
++    /// the epoch records for the leaf the sender data names. Every member
++    /// refuses such a message, so it is not the sender's text.
++    #[cfg_attr(
++        feature = "std",
++        error("framing signature of leaf {sender} generation {generation} does not verify")
++    )]
++    Rejected { sender: u32, generation: u32 },
++    /// The sender data names a generation more than
++    /// [`super::MAX_READER_SKIP`] steps past the sender's ratchet. A member chose that
++    /// number, and honouring it would cost the reader that many key
++    /// derivations, so it is refused before any is spent.
++    #[cfg_attr(
++        feature = "std",
++        error("generation {generation} is too far ahead of the sender's ratchet")
++    )]
++    GenerationTooFar { generation: u32 },
++    #[cfg_attr(feature = "std", error(transparent))]
++    Mls(MlsError),
++}
++
++impl From<MlsError> for EpochReadError {
++    fn from(error: MlsError) -> Self {
++        Self::Mls(error)
++    }
++}
++
++/// An application message opened by an [`EpochReader`], signature checked.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct OpenedMessage {
++    pub sender: u32,
++    pub generation: u32,
++    /// The signature public key the epoch records for `sender`, the one the framing signature
++    /// verified under. A consumer that binds the sender to an agent compares this key.
++    pub signer_public_key: Vec<u8>,
++    pub authenticated_data: Vec<u8>,
++    pub application_data: Vec<u8>,
++}
++
++/// Opens the PrivateMessages of one epoch from its [`EpochReadSecrets`], as a
++/// member that was never part of the group: it holds the sender-data secret and
++/// the secret-tree root, nothing else.
++///
++/// It is the member decrypt path, not a copy of it: the same
++/// `CiphertextProcessor::open` and the same framing-signature verification a
++/// member runs on a prior epoch, over a [`PriorEpoch`] built from the secrets.
++///
++/// [`EpochReadSecrets`]: super::EpochReadSecrets
++pub struct EpochReader<P: CipherSuiteProvider> {
++    epoch: PriorEpoch,
++    cipher_suite_provider: P,
++}
++
++impl<P: CipherSuiteProvider + Clone> EpochReader<P> {
++    /// `leaf_signature_keys` are `(leaf index, signature public key)` of the
++    /// non-empty leaves. The reader's own leaf index is `u32::MAX`: `open`
++    /// refuses a message whose sender is the provider's own index, and no real
++    /// leaf has that one.
++    pub fn new(
++        cipher_suite_provider: P,
++        group_context: GroupContext,
++        leaf_count: u32,
++        sender_data_secret: &[u8],
++        encryption_secret: &[u8],
++        leaf_signature_keys: impl IntoIterator<Item = (u32, Vec<u8>)>,
++    ) -> Self {
++        let mut signature_public_keys = Vec::new();
++        signature_public_keys.resize(leaf_count as usize, None);
++
++        for (leaf_index, key) in leaf_signature_keys {
++            if let Some(slot) = signature_public_keys.get_mut(leaf_index as usize) {
++                *slot = Some(SignaturePublicKey::from(key));
++            }
++        }
++
++        let secrets = EpochSecrets {
++            #[cfg(feature = "psk")]
++            resumption_secret: PreSharedKey::new(Vec::new()),
++            sender_data_secret: sender_data_secret.to_vec().into(),
++            secret_tree: SecretTree::new(leaf_count, encryption_secret.to_vec().into()),
++        };
++
++        Self {
++            epoch: PriorEpoch {
++                context: group_context,
++                self_index: LeafIndex::unchecked(u32::MAX),
++                secrets,
++                signature_public_keys,
++                #[cfg(feature = "prior_epoch_membership_key")]
++                membership_key: Default::default(),
++            },
++            cipher_suite_provider,
++        }
++    }
++
++    /// Opens an application message of this epoch.
++    ///
++    /// A generation more than 1024 ahead of the sender's ratchet is reached by
++    /// stepping the ratchet forward first, which is what a member does one
++    /// message at a time, up to [`super::MAX_READER_SKIP`] more steps
++    /// ([`EpochReadError::GenerationTooFar`] beyond that). The steps are not
++    /// kept, so after a jump the messages of one sender that fall behind the
++    /// 1024 window cannot be opened: feed each sender's messages in ascending
++    /// generation order.
++    ///
++    /// Like a member, the reader consumes the generation's key before it checks
++    /// the framing signature, so a forged message burns that generation: the
++    /// sender's genuine message at the same generation then fails to open.
++    #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
++    pub async fn open(&mut self, message: &MlsMessage) -> Result<OpenedMessage, EpochReadError> {
++        let ciphertext = message
++            .clone()
++            .into_ciphertext()
++            .ok_or(MlsError::UnexpectedMessageType)?;
++
++        if ciphertext.group_id != self.epoch.context.group_id {
++            return Err(MlsError::GroupIdMismatch.into());
++        }
++
++        if ciphertext.epoch != self.epoch.context.epoch {
++            return Err(MlsError::InvalidEpoch.into());
++        }
++
++        if ciphertext.content_type != super::ContentType::Application {
++            return Err(MlsError::UnexpectedMessageType.into());
++        }
++
++        let sender_data =
++            CiphertextProcessor::new(&mut self.epoch, self.cipher_suite_provider.clone())
++                .open_sender_data(&ciphertext)
++                .await?;
++
++        let sender = *sender_data.sender;
++        let generation = sender_data.generation;
++
++        if sender as usize >= self.epoch.signature_public_keys.len() {
++            return Err(MlsError::LeafNotFound(sender).into());
++        }
++
++        self.epoch
++            .secrets
++            .secret_tree
++            .skip_forward(
++                &self.cipher_suite_provider,
++                sender_data.sender.into(),
++                KeyType::Application,
++                generation,
++            )
++            .await
++            .map_err(|error| match error {
++                MlsError::InvalidFutureGeneration(generation) => {
++                    EpochReadError::GenerationTooFar { generation }
++                }
++                other => EpochReadError::Mls(other),
++            })?;
++
++        let content = CiphertextProcessor::new(&mut self.epoch, self.cipher_suite_provider.clone())
++            .open(&ciphertext)
++            .await?;
++
++        verify_auth_content_signature(
++            &self.cipher_suite_provider,
++            SignaturePublicKeysContainer::List(&self.epoch.signature_public_keys),
++            &self.epoch.context,
++            &content,
++            #[cfg(feature = "by_ref_proposal")]
++            &[],
++        )
++        .await
++        .map_err(|error| match error {
++            MlsError::InvalidSignature | MlsError::LeafNotFound(_) => {
++                EpochReadError::Rejected { sender, generation }
++            }
++            other => EpochReadError::Mls(other),
++        })?;
++
++        let signer_public_key = self
++            .epoch
++            .signature_public_keys
++            .get(sender as usize)
++            .and_then(Option::as_ref)
++            .ok_or(MlsError::LeafNotFound(sender))?
++            .to_vec();
++
++        match content.content.content {
++            Content::Application(data) => Ok(OpenedMessage {
++                sender,
++                generation,
++                signer_public_key,
++                authenticated_data: content.content.authenticated_data,
++                application_data: data.to_vec(),
++            }),
++            _ => Err(MlsError::UnexpectedMessageType.into()),
++        }
++    }
++}
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/group/mod.rs b/rine-mls/vendor/mls-rs-0.55.2/src/group/mod.rs
+index 1d3aafa765e875b0c335e540b0670dd5b640ea54..04414c0aa50bc3353868abcfa721817192a02d60 100644
+--- a/rine-mls/vendor/mls-rs-0.55.2/src/group/mod.rs
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/group/mod.rs
+@@ -18,7 +18,7 @@ use zeroize::Zeroizing;
+ use crate::cipher_suite::CipherSuite;
+ use crate::client::MlsError;
+ use crate::client_config::ClientConfig;
+-use crate::crypto::{HpkeCiphertext, HpkePsk, SignatureSecretKey};
++use crate::crypto::{HpkeCiphertext, HpkePsk, SignaturePublicKey, SignatureSecretKey};
+ #[cfg(feature = "last_resort_key_package_ext")]
+ use crate::extension::LastResortKeyPackageExt;
+ use crate::extension::RatchetTreeExt;
+@@ -43,6 +43,7 @@ use crate::crypto::{HpkePublicKey, HpkeSecretKey};
+ 
+ use crate::extension::ExternalPubExt;
+ 
++use self::epoch_read::EpochReadExports;
+ use self::message_hash::MessageHash;
+ #[cfg(feature = "private_message")]
+ use self::mls_rules::{EncryptionOptions, MlsRules};
+@@ -94,6 +95,12 @@ use self::message_processor::{EventOrContent, MessageProcessor, ProvisionalState
+ #[cfg(feature = "by_ref_proposal")]
+ use self::proposal_ref::ProposalRef;
+ use self::state_repo::GroupStateRepository;
++pub use epoch_read::{
++    EpochReadSecrets, MAX_DROPPED_EPOCH_READ_EPOCHS, MAX_QUEUED_EPOCH_READ_EXPORTS,
++};
++#[cfg(all(feature = "prior_epoch", feature = "private_message"))]
++pub use epoch_reader::{EpochReadError, EpochReader, OpenedMessage};
++pub use secret_tree::MAX_READER_SKIP;
+ pub use group_info::GroupInfo;
+ 
+ pub use self::framing::{ContentType, Sender};
+@@ -114,6 +121,9 @@ mod commit;
+ pub mod component_operation;
+ pub(crate) mod confirmation_tag;
+ pub(crate) mod epoch;
++mod epoch_read;
++#[cfg(all(feature = "prior_epoch", feature = "private_message"))]
++mod epoch_reader;
+ pub(crate) mod framing;
+ mod group_info;
+ pub(crate) mod key_schedule;
+@@ -271,6 +281,7 @@ where
+     pending_updates:
+         crate::map::SmallMap<HpkePublicKey, (HpkeSecretKey, Option<SignatureSecretKey>)>,
+     pending_commit: PendingCommitSnapshot,
++    epoch_read_exports: EpochReadExports,
+     #[cfg(feature = "psk")]
+     previous_psk: Option<PskSecretInput>,
+     #[cfg(test)]
+@@ -378,6 +389,15 @@ where
+         )
+         .await?;
+ 
++        let mut epoch_read_exports = EpochReadExports::default();
++
++        epoch_read_exports.push(EpochReadSecrets::capture(
++            &key_schedule_result.key_schedule,
++            &key_schedule_result.epoch_secrets,
++            &context,
++            &public_tree,
++        )?);
++
+         Ok(Self {
+             config,
+             state: GroupState::new(context, public_tree, interim_hash, confirmation_tag),
+@@ -386,6 +406,7 @@ where
+             #[cfg(feature = "by_ref_proposal")]
+             pending_updates: Default::default(),
+             pending_commit: Default::default(),
++            epoch_read_exports,
+             #[cfg(test)]
+             commit_modifiers: Default::default(),
+             epoch_secrets: key_schedule_result.epoch_secrets,
+@@ -561,6 +582,15 @@ where
+             used_key_package_ref,
+         )?;
+ 
++        let mut epoch_read_exports = EpochReadExports::default();
++
++        epoch_read_exports.push(EpochReadSecrets::capture(
++            &key_schedule,
++            &epoch_secrets,
++            &group_info.group_context,
++            &public_tree,
++        )?);
++
+         let group = Group {
+             config,
+             state: GroupState::new(
+@@ -574,6 +604,7 @@ where
+             #[cfg(feature = "by_ref_proposal")]
+             pending_updates: Default::default(),
+             pending_commit: Default::default(),
++            epoch_read_exports,
+             #[cfg(test)]
+             commit_modifiers: Default::default(),
+             epoch_secrets,
+@@ -602,6 +633,15 @@ where
+         self.context().epoch
+     }
+ 
++    /// rine patch: the public half of the key this member's next frame is signed with.
++    #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
++    pub async fn signer_public_key(&self) -> Result<SignaturePublicKey, MlsError> {
++        self.cipher_suite_provider
++            .signature_key_derive_public(&self.signer)
++            .await
++            .map_err(|e| MlsError::CryptoProviderError(e.into_any_error()))
++    }
++
+     #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
+     async fn hpke_encrypt_to_recipient_with_generic_context(
+         &self,
+@@ -1457,6 +1497,8 @@ where
+                     &self.state.public_tree,
+                     &epoch.signature_public_keys,
+                     &auth_content.content.sender,
++                    &self.config.identity_provider(),
++                    &self.state.context.extensions,
+                 )
+                 .await?;
+ 
+@@ -1612,6 +1654,8 @@ where
+                     &self.state.public_tree,
+                     &epoch.signature_public_keys,
+                     &content.content.sender,
++                    &self.config.identity_provider(),
++                    &self.state.context.extensions,
+                 )
+                 .await?;
+ 
+@@ -1625,6 +1669,25 @@ where
+         Ok(auth_content)
+     }
+ 
++    /// The read secrets of every epoch this group installed since the last
++    /// call, oldest first. Taking them empties the group's list; the copies
++    /// returned are zeroized when dropped. The group persists the list with its
++    /// snapshot until it is taken, so call this and then write the group to
++    /// storage, in that order.
++    ///
++    /// The second list holds the epochs whose export was discarded unread
++    /// because more than [`MAX_QUEUED_EPOCH_READ_EXPORTS`] were waiting, oldest
++    /// first. Taking empties it too.
++    pub fn take_epoch_read_exports(&mut self) -> (Vec<EpochReadSecrets>, Vec<u64>) {
++        self.epoch_read_exports.take()
++    }
++
++    /// How many exports are waiting to be taken, and how many epochs were
++    /// discarded past the cap since the last take.
++    pub fn epoch_read_backlog(&self) -> (usize, usize) {
++        self.epoch_read_exports.backlog()
++    }
++
+     /// Apply a pending commit that was created by [`Group::commit`] or
+     /// [`CommitBuilder::build`].
+     #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
+@@ -1654,8 +1717,16 @@ where
+             _ => return Err(MlsError::PendingCommitNotFound),
+         };
+ 
++        let export = EpochReadSecrets::capture(
++            &pending.key_schedule,
++            &pending.epoch_secrets,
++            &pending.state.context,
++            &pending.state.public_tree,
++        )?;
++
+         self.insert_past_epoch().await?;
+ 
++        self.epoch_read_exports.push(export);
+         self.state = pending.state;
+         self.epoch_secrets = pending.epoch_secrets;
+         self.private_tree = pending.private_tree;
+@@ -2500,8 +2571,16 @@ where
+             return Err(MlsError::InvalidConfirmationTag);
+         }
+ 
++        let export = EpochReadSecrets::capture(
++            &key_schedule_result.key_schedule,
++            &key_schedule_result.epoch_secrets,
++            &provisional_state.group_context,
++            &provisional_state.public_tree,
++        )?;
++
+         self.insert_past_epoch().await?;
+ 
++        self.epoch_read_exports.push(export);
+         self.epoch_secrets = key_schedule_result.epoch_secrets;
+         self.state.context = provisional_state.group_context;
+         self.state.interim_transcript_hash = interim_transcript_hash;
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/group/secret_tree.rs b/rine-mls/vendor/mls-rs-0.55.2/src/group/secret_tree.rs
+index c1600fa29e401af5209d4cfa3deb5424e0b8ff5b..c4ec7c6b4b49a846bb6146a1f3227a10d8ad769d 100644
+--- a/rine-mls/vendor/mls-rs-0.55.2/src/group/secret_tree.rs
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/group/secret_tree.rs
+@@ -19,6 +19,9 @@ use super::key_schedule::kdf_expand_with_label;
+ 
+ pub(crate) const MAX_RATCHET_BACK_HISTORY: u32 = 1024;
+ 
++/// How many steps beyond `MAX_RATCHET_BACK_HISTORY` an `EpochReader` takes to reach a generation.
++pub const MAX_READER_SKIP: u32 = 1 << 16;
++
+ #[derive(Clone, Debug, PartialEq, MlsSize, MlsEncode, MlsDecode)]
+ #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+ #[repr(u8)]
+@@ -97,6 +100,10 @@ impl<T: TreeIndex> TreeSecretsVec<T> {
+     fn take_node(&mut self, index: &T) -> Option<SecretTreeNode> {
+         self.inner.remove(index)
+     }
++
++    fn node(&self, index: &T) -> Option<&SecretTreeNode> {
++        self.inner.get(index)
++    }
+ }
+ 
+ #[derive(Clone, Debug, PartialEq, MlsEncode, MlsDecode, MlsSize)]
+@@ -156,6 +163,23 @@ impl SecretRatchets {
+         }
+     }
+ 
++    #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
++    pub async fn skip_forward<P: CipherSuiteProvider>(
++        &mut self,
++        cipher_suite: &P,
++        generation: u32,
++        key_type: KeyType,
++    ) -> Result<(), MlsError> {
++        match key_type {
++            KeyType::Handshake => self.handshake.skip_forward(cipher_suite, generation).await,
++            KeyType::Application => {
++                self.application
++                    .skip_forward(cipher_suite, generation)
++                    .await
++            }
++        }
++    }
++
+     /// Peeks at the next key generation for `key_type`, but does not increment the
+     /// generation nor derive keys.
+     #[cfg(feature = "export_key_generation")]
+@@ -181,6 +205,25 @@ impl<T: TreeIndex> SecretTree<T> {
+         }
+     }
+ 
++    /// The tree an external committer holds before its own commit is applied:
++    /// no leaves and no root, so there is nothing to read from it.
++    pub(crate) fn is_placeholder(&self) -> bool {
++        self.leaf_count == T::zero()
++    }
++
++    pub(crate) fn leaf_count(&self) -> &T {
++        &self.leaf_count
++    }
++
++    /// The `encryption_secret`, while no leaf has been derived from it yet.
++    /// `None` once `consume_node` has taken the root.
++    pub(crate) fn unconsumed_root(&self) -> Option<&[u8]> {
++        match self.known_secrets.node(&self.leaf_count.root()) {
++            Some(SecretTreeNode::Secret(secret)) => Some(secret),
++            _ => None,
++        }
++    }
++
+     #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
+     async fn consume_node<P: CipherSuiteProvider>(
+         &mut self,
+@@ -279,6 +322,28 @@ impl<T: TreeIndex> SecretTree<T> {
+         res
+     }
+ 
++    /// Steps the ratchet of `leaf_index` forward until `generation` is within
++    /// `MAX_RATCHET_BACK_HISTORY` of it, so `message_key_generation` accepts it.
++    /// The keys stepped over are dropped, not kept in the out-of-order history.
++    #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
++    pub async fn skip_forward<P: CipherSuiteProvider>(
++        &mut self,
++        cipher_suite: &P,
++        leaf_index: T,
++        key_type: KeyType,
++        generation: u32,
++    ) -> Result<(), MlsError> {
++        let mut ratchet = self.take_leaf_ratchet(cipher_suite, &leaf_index).await?;
++        let res = ratchet
++            .skip_forward(cipher_suite, generation, key_type)
++            .await;
++
++        self.known_secrets
++            .set_node(leaf_index, SecretTreeNode::Ratchet(ratchet));
++
++        res
++    }
++
+     /// Peeks at the next key generation, but does not increment the generation nor
+     /// derive keys.
+     ///
+@@ -475,6 +540,25 @@ impl SecretKeyRatchet {
+         self.next_message_key(cipher_suite_provider).await
+     }
+ 
++    #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
++    async fn skip_forward<P: CipherSuiteProvider>(
++        &mut self,
++        cipher_suite_provider: &P,
++        generation: u32,
++    ) -> Result<(), MlsError> {
++        let reach = MAX_RATCHET_BACK_HISTORY.saturating_add(MAX_READER_SKIP);
++
++        if generation > self.generation.saturating_add(reach) {
++            return Err(MlsError::InvalidFutureGeneration(generation));
++        }
++
++        while generation > self.generation.saturating_add(MAX_RATCHET_BACK_HISTORY) {
++            self.next_message_key(cipher_suite_provider).await?;
++        }
++
++        Ok(())
++    }
++
+     #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
+     async fn next_message_key<P: CipherSuiteProvider>(
+         &mut self,
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/group/snapshot.rs b/rine-mls/vendor/mls-rs-0.55.2/src/group/snapshot.rs
+index 3c3a43284f98bfffd6a3951dc45eb5846eec5806..648d7dabaac671c618006b928c6dc3317be3aaa5 100644
+--- a/rine-mls/vendor/mls-rs-0.55.2/src/group/snapshot.rs
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/group/snapshot.rs
+@@ -9,9 +9,10 @@ use crate::{
+     client::MlsError,
+     client_config::ClientConfig,
+     group::{
+-        cipher_suite_provider, epoch::EpochSecrets, key_schedule::KeySchedule,
+-        message_hash::MessageHash, state_repo::GroupStateRepository, ConfirmationTag, Group,
+-        GroupContext, GroupState, InterimTranscriptHash, ReInitProposal, TreeKemPublic,
++        cipher_suite_provider, epoch::EpochSecrets, epoch_read::EpochReadExports,
++        key_schedule::KeySchedule, message_hash::MessageHash, state_repo::GroupStateRepository,
++        ConfirmationTag, Group, GroupContext, GroupState, InterimTranscriptHash, ReInitProposal,
++        TreeKemPublic,
+     },
+     tree_kem::TreeKemPrivate,
+ };
+@@ -47,6 +48,7 @@ pub(crate) struct Snapshot {
+     pending_updates: SmallMap<HpkePublicKey, (HpkeSecretKey, Option<SignatureSecretKey>)>,
+     pending_commit_snapshot: PendingCommitSnapshot,
+     signer: SignatureSecretKey,
++    epoch_read_exports: EpochReadExports,
+ }
+ 
+ #[derive(Debug, PartialEq, Clone, Default, MlsSize, MlsEncode, MlsDecode)]
+@@ -224,6 +226,7 @@ where
+             epoch_secrets: self.epoch_secrets.clone(),
+             version: 1,
+             signer: self.signer.clone(),
++            epoch_read_exports: self.epoch_read_exports.clone(),
+         })
+     }
+ 
+@@ -259,6 +262,7 @@ where
+             #[cfg(feature = "by_ref_proposal")]
+             pending_updates: snapshot.pending_updates,
+             pending_commit: snapshot.pending_commit_snapshot,
++            epoch_read_exports: snapshot.epoch_read_exports,
+             #[cfg(test)]
+             commit_modifiers: Default::default(),
+             epoch_secrets: snapshot.epoch_secrets,
+@@ -326,6 +330,7 @@ pub(crate) mod test_utils {
+             pending_commit_snapshot: Default::default(),
+             version: 1,
+             signer: vec![].into(),
++            epoch_read_exports: Default::default(),
+         }
+     }
+ }
+diff --git a/rine-mls/vendor/mls-rs-0.55.2/src/group/util.rs b/rine-mls/vendor/mls-rs-0.55.2/src/group/util.rs
+index fde7584a57acecd49276563ceb10a4162150896a..54b9f5b9907751db232f81f2565e68a7796f1767 100644
+--- a/rine-mls/vendor/mls-rs-0.55.2/src/group/util.rs
++++ b/rine-mls/vendor/mls-rs-0.55.2/src/group/util.rs
+@@ -220,33 +220,41 @@ pub(crate) async fn find_key_package_generation<'a, K: KeyPackageStorage>(
+     Err(MlsError::WelcomeKeyPackageNotFound)
+ }
+ 
+-// Check the signature key of the prior sender: if it is not the same
+-// as the message sender then it means the leaf index got reused and
+-// the original sender isn't in the group anymore.
+-// Since PriorEpoch doesn't store old credentials we don't know who
+-// sent this. Reject the message instead of mis-attributing it to whoever
+-// has the sender's original index.
++// rine (PATCH item 9): a prior-epoch private message from leaf i opens when the
++// current tree's leaf i carries the same key, or is a valid successor of a leaf
++// that carried the epoch-n key under the current leaf's own credential. A blank
++// leaf (removed sender) or a leaf now held by another identity is refused, as
++// upstream refuses it, so nothing is attributed to whoever reuses the index.
+ #[cfg(feature = "prior_epoch")]
+ #[cfg_attr(not(mls_build_async), maybe_async::must_be_sync)]
+-pub(crate) async fn validate_sender_signature_key_from_prior_epoch(
++pub(crate) async fn validate_sender_signature_key_from_prior_epoch<I: IdentityProvider>(
+     public_tree: &TreeKemPublic,
+     prior_epoch_signature_keys: &[Option<crate::crypto::SignaturePublicKey>],
+     sender: &Sender,
++    identity_provider: &I,
++    extensions: &crate::ExtensionList,
+ ) -> Result<(), MlsError> {
+-    if let Sender::Member(i) = sender {
+-        let old_pk = prior_epoch_signature_keys
+-            .get(*i as usize)
+-            .cloned()
+-            .flatten();
+-        let cur_pk = LeafIndex::try_from(*i)
+-            .ok()
+-            .and_then(|li| public_tree.get_leaf_node(li).ok())
+-            .map(|l| l.signing_identity.signature_key.clone());
+-        if old_pk != cur_pk {
+-            return Err(MlsError::MemberNotFound);
+-        }
++    let Sender::Member(i) = sender else {
++        return Ok(());
++    };
++    let old_pk = prior_epoch_signature_keys.get(*i as usize).cloned().flatten();
++    let cur = LeafIndex::try_from(*i)
++        .ok()
++        .and_then(|li| public_tree.get_leaf_node(li).ok());
++    let (Some(old_pk), Some(cur)) = (old_pk, cur) else {
++        return Err(MlsError::MemberNotFound);
++    };
++    if old_pk == cur.signing_identity.signature_key {
++        return Ok(());
++    }
++    let predecessor = SigningIdentity::new(cur.signing_identity.credential.clone(), old_pk);
++    match identity_provider
++        .valid_successor(&predecessor, &cur.signing_identity, extensions)
++        .await
++    {
++        Ok(true) => Ok(()),
++        _ => Err(MlsError::MemberNotFound),
+     }
+-    Ok(())
+ }
+ 
+ pub(crate) fn cipher_suite_provider<P>(

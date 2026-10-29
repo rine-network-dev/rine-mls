@@ -1,19 +1,21 @@
-//! What rine's two ciphersuites are, at the code-point and primitive level.
+//! What rine's ciphersuite is, at the code-point and primitive level.
 //!
 //! Three things are checked here that no group-flow test can catch: that the
 //! post-quantum suite really sits at the private-use code point and not at the
 //! withdrawn draft's, that the primitives underneath it are the ones claimed,
-//! and that adding it left the classical suite bit-for-bit identical to the one
-//! mls-rs ships.
+//! and that it is the only suite rine speaks, RFC 9420's classical `0x0001`
+//! included.
 
 mod common;
 mod kat;
 
 use common::{group_id, TestAgent};
-use mls_rs::MlsMessage;
+use mls_rs::identity::basic::{BasicCredential, BasicIdentityProvider};
+use mls_rs::identity::SigningIdentity;
+use mls_rs::{Client, ExtensionList, MlsMessage};
 use mls_rs_core::crypto::{CipherSuite, CipherSuiteProvider, CryptoProvider};
 use mls_rs_crypto_rustcrypto::RustCryptoProvider;
-use rine_mls_core::{xwing, RineCipherSuite, RineCryptoProvider, XWING_KEM_ID};
+use rine_mls_core::{xwing, RineCipherSuite, RineCryptoProvider, RineMlsError, XWING_KEM_ID};
 
 const FIXTURE: &str = include_str!("kat/rine-suite-f057.txt");
 
@@ -34,14 +36,18 @@ fn test_post_quantum_suite_when_identified_is_the_private_use_point_not_the_with
     assert_ne!(RineCipherSuite::XWing.id(), WITHDRAWN_DRAFT_CODE_POINT);
     assert_eq!(XWING_KEM_ID, 0xF057);
 
-    assert!(RineCipherSuite::XWing.is_post_quantum());
-    assert!(!RineCipherSuite::Classical.is_post_quantum());
-    assert_eq!(RineCipherSuite::Classical.id(), 0x0001);
+    assert_eq!(RineCipherSuite::ALL, [RineCipherSuite::XWing]);
+    assert_eq!(RineCipherSuite::DEFAULT, RineCipherSuite::XWing);
 
     assert_eq!(
         RineCipherSuite::try_from(WITHDRAWN_DRAFT_CODE_POINT),
         Err(WITHDRAWN_DRAFT_CODE_POINT),
         "the withdrawn code point must not resolve to a rine suite",
+    );
+    assert_eq!(
+        RineCipherSuite::try_from(CipherSuite::CURVE25519_AES128.raw_value()),
+        Err(0x0001),
+        "the classical suite must not resolve to a rine suite, so no client opens for it",
     );
 
     for suite in RineCipherSuite::ALL {
@@ -95,6 +101,7 @@ fn test_group_when_created_on_the_post_quantum_suite_reports_that_suite() {
 fn test_provider_when_asked_for_an_unknown_suite_refuses_it() {
     for unknown in [
         WITHDRAWN_DRAFT_CODE_POINT,
+        CipherSuite::CURVE25519_AES128.raw_value(),
         CipherSuite::CURVE25519_CHACHA.raw_value(),
         CipherSuite::P256_AES128.raw_value(),
     ] {
@@ -183,49 +190,6 @@ fn test_kem_derive_when_seeded_matches_the_independently_derived_key() {
 }
 
 #[test]
-fn test_classical_suite_when_compared_to_the_upstream_provider_is_unchanged() {
-    // Adding a suite must not have moved the one that was already there.
-    let ours = provider(RineCipherSuite::Classical);
-    let upstream = RustCryptoProvider::new()
-        .cipher_suite_provider(CipherSuite::CURVE25519_AES128)
-        .expect("upstream classical suite");
-
-    let ikm = [7u8; 32];
-
-    assert_eq!(ours.cipher_suite(), upstream.cipher_suite());
-    assert_eq!(ours.aead_key_size(), upstream.aead_key_size());
-    assert_eq!(ours.aead_nonce_size(), upstream.aead_nonce_size());
-    assert_eq!(ours.kdf_extract_size(), upstream.kdf_extract_size());
-    assert_eq!(
-        ours.hash(&ikm).expect("ours"),
-        upstream.hash(&ikm).expect("upstream"),
-    );
-    assert_eq!(
-        ours.kdf_extract(b"salt", &ikm).expect("ours"),
-        upstream.kdf_extract(b"salt", &ikm).expect("upstream"),
-    );
-    assert_eq!(
-        ours.kem_derive(&ikm).expect("ours").1,
-        upstream.kem_derive(&ikm).expect("upstream").1,
-        "the classical KEM must derive the same key it always did",
-    );
-
-    // Ciphertexts made by one open under the other, so the AEAD and the HPKE
-    // composition are the same on both sides, not merely the same size.
-    let (secret, public) = ours.kem_derive(&ikm).expect("key pair");
-    let sealed = upstream
-        .hpke_seal(&public, b"info", None, b"classical stays classical")
-        .expect("upstream seal");
-
-    assert_eq!(
-        &*ours
-            .hpke_open(&sealed, &secret, &public, b"info", None)
-            .expect("ours open"),
-        b"classical stays classical",
-    );
-}
-
-#[test]
 fn test_post_quantum_hpke_when_sealed_and_opened_round_trips_a_kilobyte_ciphertext() {
     let suite = provider(RineCipherSuite::XWing);
     let (secret, public) = suite.kem_generate().expect("key pair");
@@ -274,64 +238,94 @@ fn test_post_quantum_key_when_malformed_is_rejected_before_use() {
 }
 
 #[test]
-fn test_add_member_when_the_key_package_is_from_the_other_suite_is_refused() {
-    // rine's own suite negotiation lives above MLS, but MLS is the backstop:
-    // a classical key package must never be admitted into a post-quantum group
-    // by mistake, in either direction.
-    for (group_suite, joiner_suite) in [
-        (RineCipherSuite::XWing, RineCipherSuite::Classical),
-        (RineCipherSuite::Classical, RineCipherSuite::XWing),
-    ] {
-        let founder = TestAgent::new(1, group_suite);
-        let joiner = TestAgent::new(2, joiner_suite);
+fn test_add_member_when_the_key_package_is_a_stock_classical_one_is_refused_by_name() {
+    // rine's own client can no longer mint a classical KeyPackage, but the
+    // server's upload check is not the only guard: a stock mls-rs client can
+    // still produce one, and MLS must not seat it in a post-quantum group.
+    let provider = RustCryptoProvider::new();
+    let suite = CipherSuite::CURVE25519_AES128;
+    let (secret, public) = provider
+        .cipher_suite_provider(suite)
+        .expect("stock classical suite")
+        .signature_key_generate()
+        .expect("signature key");
+    let stock = Client::builder()
+        .crypto_provider(provider)
+        .identity_provider(BasicIdentityProvider::new())
+        .signing_identity(
+            SigningIdentity::new(
+                BasicCredential::new(b"stock".to_vec()).into_credential(),
+                public,
+            ),
+            secret,
+            suite,
+        )
+        .build();
+    let classical = stock
+        .generate_key_package_message(ExtensionList::new(), ExtensionList::new(), None)
+        .expect("classical key package")
+        .to_bytes()
+        .expect("encode");
 
-        let (mut group, _) = founder
-            .client
-            .create_group(&group_id(0xC1))
-            .expect("create");
-        let key_package = joiner.client.generate_key_package().expect("key package");
+    let founder = TestAgent::new(1, RineCipherSuite::XWing);
+    let (mut group, _) = founder
+        .client
+        .create_group(&group_id(0xC1))
+        .expect("create");
 
-        assert!(
-            group.add_member(&key_package).is_err(),
-            "{joiner_suite:?} key package must not join a {group_suite:?} group",
-        );
-    }
+    assert!(matches!(
+        group.add_member(&classical),
+        Err(RineMlsError::CipherSuiteMismatch {
+            expected: 0xF057,
+            got: 0x0001,
+        })
+    ));
 }
 
+/// Pins the claim `rine-mls/deny.toml` makes to ignore RUSTSEC-2026-0387
+/// (crypto-bigint, reached only through mls-rs-crypto-rustcrypto's P-256/P-384
+/// code): the one suite rine builds is 0xF057 with Ed25519 signatures and the
+/// X-Wing KEM, and no P-256/P-384 suite is offered or accepted.
 #[test]
-fn test_saved_group_when_reloaded_keeps_its_own_suite_whatever_the_client_was_built_for() {
-    // A client's suite decides what it *mints* — key packages and new groups.
-    // An existing group carries its own suite in its state and keeps it, so one
-    // agent can sit in a classical group and a post-quantum group at once
-    // without needing a client for each.
-    let alice = TestAgent::new(1, RineCipherSuite::XWing);
-    let bob = TestAgent::new(2, RineCipherSuite::XWing);
-    let id = group_id(0xC2);
-
-    let (mut group, _) = alice.client.create_group(&id).expect("create");
-    let add = group
-        .add_member(&bob.client.generate_key_package().expect("key package"))
-        .expect("add");
-    let mut bob_group = bob
-        .client
-        .join_from_welcome(&add.welcomes[0])
-        .expect("join");
-    bob_group.save().expect("persist");
-
-    let ciphertext = group
-        .encrypt_application_message(b"still post-quantum")
-        .expect("encrypt");
-
-    let mut reloaded = bob
-        .reopen_as(RineCipherSuite::Classical)
-        .load_group(&id)
-        .expect("the group's own suite is what counts");
-
+fn test_provider_when_built_offers_only_xwing_with_ed25519_and_never_a_p256_or_p384_suite() {
     assert_eq!(
-        reloaded
-            .decrypt_application_message(&ciphertext)
-            .expect("decrypt")
-            .envelope,
-        b"still post-quantum",
+        RineCryptoProvider.supported_cipher_suites(),
+        vec![CipherSuite::new(0xF057)],
     );
+
+    // Every RFC 9420 suite plus the mls-rs experimental ones, P-256 (2), P-521
+    // (5) and P-384 (7) among them: none may resolve to a provider.
+    for id in (0..=0x0010u16).chain([65001, 65002, 65003, 65100]) {
+        assert_eq!(
+            RineCryptoProvider
+                .cipher_suite_provider(CipherSuite::new(id))
+                .is_some(),
+            id == 0xF057,
+            "0x{id:04X} must be accepted only if it is rine's suite",
+        );
+    }
+
+    let suite = provider(RineCipherSuite::XWing);
+    assert_eq!(suite.cipher_suite(), CipherSuite::new(0xF057));
+
+    // Ed25519: a 32-byte public key, and a signature that the independent
+    // ed25519-dalek verifier accepts. A P-256 or P-384 signer cannot satisfy both.
+    let (secret, public) = suite.signature_key_generate().expect("signature key");
+    assert_eq!(public.len(), 32);
+    let signature = suite.sign(&secret, b"pin").expect("sign");
+    assert_eq!(signature.len(), 64);
+    let key: [u8; 32] = public.as_ref().try_into().expect("32-byte key");
+    ed25519_dalek::VerifyingKey::from_bytes(&key)
+        .expect("Ed25519 point")
+        .verify_strict(
+            b"pin",
+            &ed25519_dalek::Signature::from_slice(&signature).expect("64-byte signature"),
+        )
+        .expect("dalek verifies the provider's signature");
+
+    // X-Wing KEM: its id, and the key sizes only X-Wing has.
+    let (kem_secret, kem_public) = suite.kem_generate().expect("kem key");
+    assert_eq!(XWING_KEM_ID, 0xF057);
+    assert_eq!(kem_secret.len(), xwing::DECAPSULATION_KEY_SIZE);
+    assert_eq!(kem_public.len(), xwing::ENCAPSULATION_KEY_SIZE);
 }

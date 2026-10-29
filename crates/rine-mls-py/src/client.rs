@@ -1,20 +1,23 @@
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use rine_mls_core::{
-    AgentSigningKey, MlsStoreRoot, PanicGuard, RineCipherSuite, RineMlsClient,
+    LeafIdentity, MlsStoreRoot, PanicGuard, RineCipherSuite, RineMlsClient,
     RineMlsError as CoreError,
 };
 
+use crate::allowed::AllowedIdentities;
 use crate::error::guard;
 use crate::group::MlsGroup;
 use crate::options::{client_options, to_bytes};
 
-/// One rine agent's MLS client, bound to that agent's Ed25519 identity and its
-/// own local state directory.
+/// One rine agent's MLS client, bound to that agent's leaf identity and its own
+/// local state directory.
 ///
-/// The identity seed is copied into Rust on construction and the copy is
-/// zeroized when the client drops. The caller's ``bytes`` belongs to the Python
-/// heap and is immutable, so it cannot be wiped from here.
+/// The identity is the agent id — its MLS basic-credential identity — plus the
+/// 32-byte leaf signature seed derived for it (``mls.key``). Both are copied
+/// into Rust on construction and the copy is zeroized when the client drops. The
+/// caller's ``bytes`` belongs to the Python heap and is immutable, so it cannot
+/// be wiped from here.
 ///
 /// **One client per store root at a time.** Group state is a ratchet: two
 /// clients loaded from the same group directory both commit, at the same epoch,
@@ -26,23 +29,29 @@ use crate::options::{client_options, to_bytes};
 /// is safe under concurrent minting; group state is what is unprotected.)
 #[pyclass(module = "rine_mls")]
 pub struct MlsClient {
-    inner: RineMlsClient,
-    poison: PanicGuard,
+    /// `pub(crate)` for the sibling modules that add methods to this handle.
+    pub(crate) inner: RineMlsClient,
+    pub(crate) poison: PanicGuard,
 }
 
 #[pymethods]
 impl MlsClient {
     /// ``store_root`` is this agent's private MLS directory
-    /// (``keys/<agent>/mls2``), ``signing_seed`` its 32-byte Ed25519 private key
-    /// as rine stores it, and ``cipher_suite`` the wire id the server persists as
-    /// ``mls_cipher_suite`` — ``CIPHER_SUITE_DEFAULT`` unless there is a reason
-    /// to pin one. ``epoch_retention_limit`` is documented on
+    /// (``keys/<agent>/mls2``), ``agent_id`` its credential identity,
+    /// ``leaf_seed`` the 32-byte derived leaf signature seed (``mls.key``), and
+    /// ``cipher_suite`` the wire id the server persists as ``mls_cipher_suite``
+    /// — ``CIPHER_SUITE_DEFAULT`` unless there is a reason to pin one.
+    /// ``allowed`` is the chain-verified set of ``(agent id, leaf key)`` pairs
+    /// this client accepts as members, its own pair included.
+    /// ``epoch_retention_limit`` is documented on
     /// [`crate::options::client_options`].
     #[new]
-    #[pyo3(signature = (store_root, signing_seed, cipher_suite, *, epoch_retention_limit=None))]
+    #[pyo3(signature = (store_root, agent_id, leaf_seed, allowed, cipher_suite, *, epoch_retention_limit=None))]
     fn new(
         store_root: &str,
-        signing_seed: &[u8],
+        agent_id: &[u8],
+        leaf_seed: &[u8],
+        allowed: &AllowedIdentities,
         cipher_suite: u16,
         epoch_retention_limit: Option<usize>,
     ) -> PyResult<Self> {
@@ -50,11 +59,12 @@ impl MlsClient {
         let inner = guard(&mut poison, || {
             let suite = RineCipherSuite::try_from(cipher_suite)
                 .map_err(|id| CoreError::UnsupportedCipherSuite { id })?;
-            let key = AgentSigningKey::from_seed(signing_seed)?;
+            let identity = LeafIdentity::new(agent_id, leaf_seed)?;
 
             Ok(RineMlsClient::open_with(
                 MlsStoreRoot::new(store_root),
-                &key,
+                &identity,
+                allowed.inner.clone(),
                 suite,
                 client_options(epoch_retention_limit)?,
             ))
@@ -69,10 +79,17 @@ impl MlsClient {
         self.inner.cipher_suite().id()
     }
 
-    /// The agent's raw Ed25519 public key, which is also its MLS
-    /// basic-credential identity and the input to ``MlsGroup.member_index``.
-    fn public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
-        PyBytes::new(py, &self.inner.public_key())
+    /// The agent id: its MLS basic-credential identity, and the input to
+    /// ``MlsGroup.member_index``.
+    fn agent_id<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, self.inner.agent_id())
+    }
+
+    /// The raw 32-byte Ed25519 leaf signature public key this client's
+    /// KeyPackages and commits are signed under — the ``mls`` field of the
+    /// agent's certificate, and the second half of the pair ``allowed`` holds.
+    fn leaf_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.leaf_public_key())
     }
 
     /// Mint one KeyPackage for ``POST /agents/{id}/mls/key-packages``. Its
@@ -168,7 +185,8 @@ impl MlsClient {
     /// nothing. An agent the tree **already** holds is refused by MLS — a
     /// second leaf carrying one identity is not a thing that can exist — so a
     /// member recovering from unusable local state wants
-    /// ``resync_by_external_commit`` instead.
+    /// ``resync_by_external_commit`` (with a stale handle) or
+    /// ``resync_from_group_info`` (without one) instead.
     fn join_by_external_commit(&mut self, group_info: &[u8]) -> PyResult<MlsGroup> {
         let inner = &self.inner;
         let (group, bundle) = guard(&mut self.poison, || {
@@ -191,8 +209,8 @@ impl MlsClient {
     /// ``welcomes`` is empty because an external commit adds nobody.
     ///
     /// It needs loadable stale state, because that is where the leaf index
-    /// comes from. An agent whose group state is gone entirely has no resync —
-    /// it has to be removed and re-invited.
+    /// comes from. An agent whose group state is gone entirely wants
+    /// ``resync_from_group_info`` instead.
     fn resync_by_external_commit(
         &mut self,
         group_info: &[u8],
@@ -201,6 +219,28 @@ impl MlsClient {
         let inner = &self.inner;
         let (group, bundle) = guard(&mut self.poison, || {
             inner.resync_by_external_commit(group_info, stale_leaf)
+        })?;
+
+        Ok(MlsGroup::new(group, Some(bundle)))
+    }
+
+    /// Rejoin a group this agent already holds a seat in when its local state is
+    /// gone: an external commit that finds the seat in the GroupInfo's ratchet
+    /// tree, removes that leaf and adds a fresh one under the same credential.
+    ///
+    /// The new leaf keeps the credential **and** the leaf key; a resync that
+    /// changes the key raises ``ResyncChangesKeyError``, and an agent whose leaf
+    /// key rotated moves its seat with ``MlsGroup.commit_update`` instead. A
+    /// tree with no leaf for
+    /// this agent raises ``NoSeatToReplaceError``, one with several raises
+    /// ``AmbiguousSeatError``, and a GroupInfo carrying no ratchet tree raises
+    /// ``GroupInfoWithoutTreeError``. ``last_commit()`` carries the commit to
+    /// POST and the GroupInfo to republish, and the resync epoch is escrowed
+    /// like any other.
+    fn resync_from_group_info(&mut self, group_info: &[u8]) -> PyResult<MlsGroup> {
+        let inner = &self.inner;
+        let (group, bundle) = guard(&mut self.poison, || {
+            inner.resync_from_group_info(group_info)
         })?;
 
         Ok(MlsGroup::new(group, Some(bundle)))

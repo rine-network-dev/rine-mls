@@ -1,10 +1,12 @@
 //! The group lifecycle a rine client drives: founding, both join paths,
 //! reloading from disk, and retiring local state.
 
-use mls_rs::ExtensionList;
+use mls_rs::error::MlsError;
+use mls_rs::{ExtensionList, MlsMessage};
 
-use crate::error::{MlsBlobKind, Result};
+use crate::error::{MlsBlobKind, Result, RineMlsError};
 use crate::group::{CommitBundle, RineMlsGroup};
+use crate::store::Incarnation;
 use crate::wire;
 
 use super::RineMlsClient;
@@ -47,7 +49,7 @@ impl RineMlsClient {
             None,
         )?;
 
-        let mut group = self.group(inner);
+        let mut group = self.group(inner, None);
         let bundle = group.add_members(key_packages)?;
 
         Ok((group, bundle))
@@ -64,7 +66,12 @@ impl RineMlsClient {
         let message = wire::decode(welcome, MlsBlobKind::Welcome, self.suite)?;
         let (inner, _) = self.inner.join_group(None, &message, None)?;
 
-        Ok(self.group(inner))
+        // The join verified the epoch it lands on, which is where the new state
+        // begins; nothing on disk changes until the handle's first save.
+        let stage = self.group_state.stage(inner.group_id());
+        let floor = inner.current_epoch();
+
+        Ok(self.group(inner, Some(Incarnation { stage, floor })))
     }
 
     /// Self-join by RFC 9420 external commit, from a GroupInfo carrying
@@ -116,6 +123,26 @@ impl RineMlsClient {
     ) -> Result<(RineMlsGroup, CommitBundle)> {
         let message = wire::decode(group_info, MlsBlobKind::GroupInfo, self.suite)?;
 
+        self.external_commit_message(message, replacing)
+    }
+
+    pub(super) fn external_commit_message(
+        &self,
+        message: MlsMessage,
+        replacing: Option<u32>,
+    ) -> Result<(RineMlsGroup, CommitBundle)> {
+        let (group_id, epoch) = message.group_id().zip(message.epoch()).ok_or(
+            RineMlsError::UnexpectedMessageContent {
+                expected: MlsBlobKind::GroupInfo,
+            },
+        )?;
+        self.refuse_older_than_held(group_id, epoch)?;
+
+        // The build applies its own commit, which inserts the GroupInfo's epoch
+        // as a prior epoch of the new state; staged, that insert does not have to
+        // follow epochs kept from an earlier state of this group.
+        let stage = self.group_state.stage(group_id);
+
         let mut builder = self.inner.external_commit_builder()?;
         if let Some(stale_leaf) = replacing {
             builder = builder.with_removal(stale_leaf);
@@ -123,10 +150,26 @@ impl RineMlsClient {
 
         let (inner, commit) = builder.build(message)?;
 
-        let group = self.group(inner);
+        // The verified GroupInfo epoch: the build applied exactly one commit.
+        let floor = inner.current_epoch() - 1;
+        let group = self.group(inner, Some(Incarnation { stage, floor }));
         let bundle = group.external_join_bundle(commit)?;
 
         Ok((group, bundle))
+    }
+
+    /// Refuse a GroupInfo older than the state this client holds for the group,
+    /// which would fork this member back to an epoch it has left. The header
+    /// epoch is unverified, but it only ever refuses: accepting still rests on
+    /// the build verifying the GroupInfo. State that does not load is not
+    /// compared, as every caller already treats it as absent.
+    fn refuse_older_than_held(&self, group_id: &[u8], epoch: u64) -> Result<()> {
+        match self.inner.load_group(group_id) {
+            Ok(held) if epoch < held.current_epoch() => {
+                Err(RineMlsError::Mls(MlsError::InvalidEpoch))
+            }
+            _ => Ok(()),
+        }
     }
 
     /// Reload a group from local state — the proof that state survives the
@@ -134,7 +177,7 @@ impl RineMlsClient {
     pub fn load_group(&self, group_id: &[u8]) -> Result<RineMlsGroup> {
         let inner = self.inner.load_group(group_id)?;
 
-        Ok(self.group(inner))
+        Ok(self.group(inner, None))
     }
 
     /// Delete one group's local MLS state: its current state, every retained

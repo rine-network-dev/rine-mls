@@ -41,7 +41,7 @@ const SIZES: [usize; 5] = [16, 100, 250, 500, 1000];
 const SUPERLINEAR_EXPONENT: f64 = 1.1;
 
 /// The steady-state table: one Add, one Remove, one application message and the
-/// on-disk residue, at four group sizes on both suites.
+/// on-disk residue, at four group sizes on every suite.
 ///
 /// ```text
 /// cargo test --release -p rine-mls-core --test scale_steady -- --ignored --nocapture \

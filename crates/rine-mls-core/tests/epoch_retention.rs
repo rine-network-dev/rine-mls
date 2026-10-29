@@ -137,7 +137,7 @@ fn test_backlog_when_retention_is_tightened_is_traded_away_deliberately() {
 
 #[test]
 fn test_epoch_secrets_when_retention_is_tightened_are_deleted_from_disk() {
-    let suite = RineCipherSuite::Classical;
+    let suite = RineCipherSuite::XWing;
     let keep = 2;
     let bob = TestAgent::with_options(
         2,
@@ -165,7 +165,7 @@ fn test_epoch_secrets_when_retention_is_tightened_are_deleted_from_disk() {
 
 #[test]
 fn test_epoch_secrets_when_inside_the_shipped_window_are_all_kept_on_disk() {
-    let suite = RineCipherSuite::Classical;
+    let suite = RineCipherSuite::XWing;
     let bob = TestAgent::new(2, suite);
 
     let (_, epoch) = backlog_scenario(&bob, suite);

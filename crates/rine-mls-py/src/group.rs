@@ -19,9 +19,10 @@ use crate::types::{convert_bundle, convert_members, AppMessage, CommitBundle, Me
 /// a rejected commit leaves no forked state behind.
 #[pyclass(module = "rine_mls")]
 pub struct MlsGroup {
-    inner: RineMlsGroup,
+    /// `pub(crate)` for the sibling modules that add methods to this handle.
+    pub(crate) inner: RineMlsGroup,
     last_commit: Option<rine_mls_core::CommitBundle>,
-    poison: PanicGuard,
+    pub(crate) poison: PanicGuard,
 }
 
 impl MlsGroup {
@@ -71,8 +72,8 @@ impl MlsGroup {
         guard(&mut self.poison, || Ok(inner.is_active()))
     }
 
-    /// Leaf index of the member whose basic-credential identity (its raw
-    /// Ed25519 public key) is ``identity`` — the input to ``remove_member``.
+    /// Leaf index of the member whose basic-credential identity (its agent id
+    /// bytes) is ``identity`` — the input to ``remove_member``.
     fn member_index(&mut self, identity: &[u8]) -> PyResult<u32> {
         let inner = &self.inner;
         guard(&mut self.poison, || inner.member_index(identity))
@@ -193,7 +194,7 @@ impl MlsGroup {
 }
 
 impl MlsGroup {
-    fn commit(
+    pub(crate) fn commit(
         &mut self,
         build: impl FnOnce(&mut RineMlsGroup) -> Result<rine_mls_core::CommitBundle, CoreError>,
     ) -> PyResult<CommitBundle> {

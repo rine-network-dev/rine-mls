@@ -1,9 +1,10 @@
 [workspace]
 resolver = "2"
 members = ["crates/rine-mls-core", "crates/rine-mls-node", "crates/rine-mls-py"]
+exclude = ["vendor"]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -30,6 +31,7 @@ hex = "0.4.3"
 # the crate keeps building for every target in the release matrix and wasm32.
 libcrux-ml-kem = { version = "=0.0.10", default-features = false, features = ["mlkem768"] }
 libcrux-sha3 = { version = "=0.0.10", default-features = false }
+libcrux-ml-dsa = { version = "=0.0.10", default-features = false, features = ["mldsa65"] }
 x25519-dalek = { version = "=2.0.1", default-features = false, features = ["alloc", "static_secrets"] }
 rand_core = { version = "=0.6.4", default-features = false, features = ["getrandom"] }
 
@@ -40,3 +42,9 @@ napi = { version = "=3.11.0", default-features = false, features = ["napi8"] }
 napi-derive = { version = "=3.6.0", default-features = false }
 napi-build = "=2.3.2"
 pyo3 = { version = "=0.29.0", default-features = false, features = ["macros", "extension-module", "abi3-py39"] }
+
+# mls-rs is vendored and patched to export the per-epoch read secrets (SPEC
+# 9.9); vendor/mls-rs-0.55.2/PATCH.md describes every change. The version
+# stays 0.55.2, so the exact pin above still binds.
+[patch.crates-io]
+mls-rs = { path = "vendor/mls-rs-0.55.2" }

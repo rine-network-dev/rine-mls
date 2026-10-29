@@ -27,11 +27,21 @@ all-features = true
 [advisories]
 # Everything the RustSec database knows about, at the strictest setting the tool
 # offers: a published vulnerability, an unmaintained crate or a withdrawn
-# version all fail the build rather than warn. There is no `ignore` list, and
-# adding one is a decision to record and justify, not a formatting fix.
+# version all fail the build rather than warn. Every entry in the `ignore` list
+# is a decision to record and justify, not a formatting fix.
 db-urls = ["https://github.com/rustsec/advisory-db"]
 yanked = "deny"
-ignore = []
+ignore = [
+    # crypto-bigint 0.5.5 arrives only through the P-256/P-384 code in
+    # mls-rs-crypto-rustcrypto. The one MLS suite rine uses signs with Ed25519
+    # and refuses every other suite id, so that code never handles rine's
+    # secrets. Pinned by rine-mls/crates/rine-mls-core/tests/cipher_suites.rs::
+    # test_provider_when_built_offers_only_xwing_with_ed25519_and_never_a_p256_or_p384_suite
+    # (0xF057 only, Ed25519 signer, X-Wing KEM, every P-256/P-384 id refused);
+    # if it goes red this ignore is no longer justified.
+    # Revisit when mls-rs ships a provider on crypto-bigint >= 0.7.6.
+    "RUSTSEC-2026-0387",
+]
 
 [licenses]
 # Allowlist, never a denylist: a licence nobody thought about fails the gate,

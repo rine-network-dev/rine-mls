@@ -87,7 +87,7 @@ for (const [suiteName, suite] of SUITES) {
 
     // --- eviction ----------------------------------------------------------
     const backlog = aliceGroup.encryptApplicationMessage(envelope("last one carol sees"));
-    const removal = aliceGroup.removeMember(aliceGroup.memberIndex(carolClient.publicKey()));
+    const removal = aliceGroup.removeMember(aliceGroup.memberIndex(carolClient.agentId()));
 
     assert.equal(removal.epoch, 3);
     assert.equal(carolGroup.applyCommit(removal.commit), 2, "an evicted member gets no new epoch");
@@ -208,7 +208,7 @@ for (const [suiteName, suite] of SUITES) {
 
     const seated = tree.map((m) => Buffer.from(m.identity).toString("hex")).sort();
     const expected = [aliceClient, bobClient, carolClient]
-      .map((c) => Buffer.from(c.publicKey()).toString("hex"))
+      .map((c) => Buffer.from(c.agentId()).toString("hex"))
       .sort();
     assert.deepEqual(seated, expected, "the identities are the members' public keys");
 
@@ -218,7 +218,7 @@ for (const [suiteName, suite] of SUITES) {
     ]) {
       assert.equal(
         group.currentMemberIndex(),
-        group.memberIndex(client.publicKey()),
+        group.memberIndex(client.agentId()),
         "a handle must agree with itself about which leaf it occupies",
       );
     }
@@ -241,7 +241,7 @@ for (const [suiteName, suite] of SUITES) {
 
     const after = resynced.memberIdentities();
     const bobLeaves = after.filter(
-      (m) => Buffer.compare(Buffer.from(m.identity), Buffer.from(bobClient.publicKey())) === 0,
+      (m) => Buffer.compare(Buffer.from(m.identity), Buffer.from(bobClient.agentId())) === 0,
     );
 
     assert.equal(after.length, tree.length, "a resync does not change the membership count");

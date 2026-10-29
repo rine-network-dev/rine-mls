@@ -1,5 +1,4 @@
 use mls_rs_core::error::{AnyError, IntoAnyError};
-use mls_rs_crypto_hpke::dhkem::DhKemError;
 use mls_rs_crypto_hpke::hpke::HpkeError;
 use mls_rs_crypto_rustcrypto::ec_signer::EcSignerError;
 use mls_rs_crypto_rustcrypto::mac::HashError;
@@ -9,9 +8,6 @@ use crate::xwing::XWingError;
 /// Failures from the KEM half of a rine ciphersuite.
 #[derive(Debug, thiserror::Error)]
 pub enum RineKemError {
-    #[error(transparent)]
-    DiffieHellman(#[from] DhKemError),
-
     #[error(transparent)]
     XWing(#[from] XWingError),
 

@@ -16,15 +16,21 @@
 # what `--native` uploads; this script used to `cp` its host build straight into
 # npm/linux-x64-gnu/, so running the test gate silently changed what would ship. Both the
 # build tree (CARGO_TARGET_DIR below) and the pack tree ($work/platform) are therefore
-# private to this run — nothing here writes inside the crate's npm/ directories.
+# private to this run — nothing here writes inside the crate's npm/ directories, and the
+# crate-root addon the build overwrites is restored on exit (keep-addon.sh).
 
 set -euo pipefail
 
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
 
 cd "$crate_dir"
+
+# The release build below writes its addon into the crate root; put back whatever was there.
+# shellcheck source=keep-addon.sh
+. "$crate_dir/test/keep-addon.sh"
+keep_addon
+trap 'rm -rf "$work"; restore_addon' EXIT
 
 # Same reason as test/run.sh: the host triple collides with a cross-build target, and
 # target/gate is inside the one path rine-mls/.gitignore covers.

@@ -1,12 +1,11 @@
-//! rine's MLS crypto provider: the classical ciphersuite plus rine's own
-//! post-quantum one, from a single set of primitives.
+//! rine's MLS crypto provider: rine's post-quantum ciphersuite from a single set
+//! of primitives.
 //!
-//! The two suites differ in exactly one component, the KEM. The AEAD, KDF,
-//! hash and signature scheme are taken unmodified from the providers mls-rs
-//! ships, so nothing here re-implements a primitive; the post-quantum suite's
-//! only new cryptography is the X-Wing KEM in [`crate::xwing`].
+//! The AEAD, KDF, hash and signature scheme are taken unmodified from the
+//! providers mls-rs ships, so nothing here re-implements a primitive; the
+//! suite's only new cryptography is the X-Wing KEM in [`crate::xwing`].
 //!
-//! The post-quantum suite lives at a private-use ciphersuite code point, which
+//! The suite lives at a private-use ciphersuite code point, which
 //! is what RFC 9420 reserves that range for. It is not the code point the
 //! withdrawn X-Wing MLS draft used: that one is back in the standards range and
 //! can be assigned to something else, and a group that silently disagreed with
@@ -18,11 +17,10 @@ mod error;
 mod kem;
 
 use mls_rs_core::crypto::{CipherSuite, CryptoProvider};
-use mls_rs_crypto_hpke::dhkem::DhKem;
 use mls_rs_crypto_hpke::hpke::Hpke;
-use mls_rs_crypto_rustcrypto::{aead::Aead, ec_signer::EcSigner, ecdh::Ecdh, kdf::Kdf, mac::Hash};
-use mls_rs_crypto_traits::KemId;
+use mls_rs_crypto_rustcrypto::{aead::Aead, ec_signer::EcSigner, kdf::Kdf, mac::Hash};
 
+use crate::error::RineMlsError;
 use crate::suite::RineCipherSuite;
 use kem::RineKem;
 
@@ -60,11 +58,16 @@ pub struct RineCipherSuiteProvider {
 }
 
 impl RineCipherSuiteProvider {
+    /// The provider of a suite rine speaks. Every [`RineCipherSuite`] has one;
+    /// the error exists so no caller has to assert that.
+    pub(crate) fn for_suite(suite: RineCipherSuite) -> Result<Self, RineMlsError> {
+        Self::new(suite).ok_or(RineMlsError::UnsupportedCipherSuite { id: suite.id() })
+    }
+
     fn new(suite: RineCipherSuite) -> Option<Self> {
-        // Both suites borrow their non-KEM primitives from an RFC 9420 suite
-        // that already defines them, so `Kdf`/`Aead`/`Hash`/`EcSigner` are
-        // constructed exactly as mls-rs' own provider constructs them and the
-        // classical suite stays bit-for-bit what it was.
+        // The suite borrows its non-KEM primitives from an RFC 9420 suite that
+        // already defines them, so `Kdf`/`Aead`/`Hash`/`EcSigner` are
+        // constructed exactly as mls-rs' own provider constructs them.
         let primitives = suite.primitives();
 
         let kdf = Kdf::new(primitives)?;
@@ -72,27 +75,13 @@ impl RineCipherSuiteProvider {
         let hash = Hash::new(primitives).ok()?;
         let signer = EcSigner::new(primitives)?;
 
-        let kem = match suite {
-            RineCipherSuite::Classical => {
-                let kem_id = KemId::new(primitives)?;
-
-                RineKem::X25519HkdfSha256(DhKem::new(
-                    Ecdh::new(primitives)?,
-                    kdf,
-                    kem_id as u16,
-                    kem_id.n_secret(),
-                ))
-            }
-            RineCipherSuite::XWing => RineKem::XWing,
-        };
-
         Some(Self {
             cipher_suite: suite.mls_rs(),
             aead,
             kdf,
             hash,
             signer,
-            hpke: Hpke::new(kem, kdf, Some(aead)),
+            hpke: Hpke::new(RineKem, kdf, Some(aead)),
         })
     }
 }

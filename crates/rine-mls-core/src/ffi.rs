@@ -36,9 +36,14 @@ pub enum Guarded<T> {
 }
 
 /// One handle's panic state. `Default` is "healthy".
+///
+/// It also remembers which agent the last call's allowed-set refusal named, so
+/// both bindings expose the same read-only getter and [`Guarded`] stays a plain
+/// value-or-code result.
 #[derive(Debug, Default)]
 pub struct PanicGuard {
     tripped: bool,
+    refused_peer: Option<Vec<u8>>,
 }
 
 impl PanicGuard {
@@ -48,6 +53,8 @@ impl PanicGuard {
     /// it: the state may well be inconsistent after a panic, which is exactly
     /// why the handle is retired instead of trusted.
     pub fn run<T>(&mut self, op: impl FnOnce() -> Result<T>) -> Guarded<T> {
+        self.refused_peer = None;
+
         if self.tripped {
             return Guarded::Err {
                 code: RineMlsErrorCode::Poisoned,
@@ -59,10 +66,13 @@ impl PanicGuard {
 
         match catch_unwind(AssertUnwindSafe(op)) {
             Ok(Ok(value)) => Guarded::Ok(value),
-            Ok(Err(e)) => Guarded::Err {
-                code: e.code(),
-                message: e.to_string(),
-            },
+            Ok(Err(e)) => {
+                self.refused_peer = e.refused_peer().map(<[u8]>::to_vec);
+                Guarded::Err {
+                    code: e.code(),
+                    message: e.to_string(),
+                }
+            }
             Err(payload) => {
                 self.tripped = true;
                 Guarded::Err {
@@ -71,6 +81,13 @@ impl PanicGuard {
                 }
             }
         }
+    }
+
+    /// The credential identity of the leaf the allowed set refused in the last
+    /// call on this handle, or `None` after any other outcome. Reads recorded
+    /// state; read it straight after the failing call.
+    pub fn refused_peer(&self) -> Option<&[u8]> {
+        self.refused_peer.as_deref()
     }
 }
 
@@ -82,73 +99,4 @@ fn describe(payload: &(dyn Any + Send)) -> &str {
         return s.as_str();
     }
     "panic payload was not a string"
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::error::RineMlsError;
-
-    fn failed<T>(guarded: Guarded<T>) -> (RineMlsErrorCode, String) {
-        match guarded {
-            Guarded::Err { code, message } => (code, message),
-            Guarded::Ok(_) => panic!("expected a failure"),
-        }
-    }
-
-    #[test]
-    fn test_run_when_the_operation_succeeds_returns_the_value() {
-        let mut guard = PanicGuard::default();
-        assert!(matches!(guard.run(|| Ok(7)), Guarded::Ok(7)));
-    }
-
-    #[test]
-    fn test_run_when_the_operation_fails_normally_leaves_the_handle_usable() {
-        let mut guard = PanicGuard::default();
-
-        let (code, message) = failed(guard.run(|| {
-            Err::<(), _>(RineMlsError::EpochConflict {
-                current: 7,
-                commit: 6,
-            })
-        }));
-        assert_eq!(code, RineMlsErrorCode::EpochConflict);
-        assert!(message.contains("epoch 7"));
-
-        assert!(matches!(guard.run(|| Ok(1)), Guarded::Ok(1)));
-    }
-
-    #[test]
-    fn test_run_when_the_operation_panics_reports_it_without_unwinding() {
-        let mut guard = PanicGuard::default();
-
-        let (code, message) = failed(guard.run(|| -> Result<()> { panic!("torn ratchet") }));
-        assert_eq!(code, RineMlsErrorCode::Panic);
-        assert!(message.contains("torn ratchet"));
-    }
-
-    #[test]
-    fn test_run_when_a_previous_call_panicked_refuses_to_run_at_all() {
-        let mut guard = PanicGuard::default();
-        let _ = guard.run(|| -> Result<()> { panic!("torn ratchet") });
-
-        let mut ran = false;
-        let (code, _) = failed(guard.run(|| {
-            ran = true;
-            Ok(())
-        }));
-        assert_eq!(code, RineMlsErrorCode::Poisoned);
-        assert!(!ran, "a poisoned handle must not touch MLS state again");
-    }
-
-    #[test]
-    fn test_run_when_the_panic_payload_is_not_a_string_still_reports_a_panic() {
-        let mut guard = PanicGuard::default();
-
-        let (code, message) = failed(guard.run(|| -> Result<()> {
-            std::panic::panic_any(42u8);
-        }));
-        assert_eq!(code, RineMlsErrorCode::Panic);
-        assert!(message.contains("not a string"));
-    }
 }

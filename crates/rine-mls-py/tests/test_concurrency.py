@@ -27,10 +27,11 @@ PER_WORKER = 4
 WORKERS = 4
 
 
-def _mint(args: tuple[str, bytes, int, int]) -> int:
+def _mint(args: tuple[str, bytes, bytes, int, int]) -> int:
     """Mint KeyPackages into a store root several workers are writing to."""
-    store_root, seed, suite, count = args
-    return len(rine_mls.MlsClient(store_root, seed, suite).generate_key_packages(count))
+    store_root, agent_id, seed, suite, count = args
+    client = rine_mls.MlsClient(store_root, agent_id, seed, rine_mls.AllowedIdentities(), suite)
+    return len(client.generate_key_packages(count))
 
 
 def test_handle_when_used_from_several_threads_stays_consistent(make_agent):
@@ -48,7 +49,7 @@ def test_handle_when_used_from_several_threads_stays_consistent(make_agent):
 
 def test_key_package_store_when_minted_from_several_threads_stays_countable(make_agent):
     shared = make_agent("shared")
-    job = (str(shared.store_root), shared.seed, shared.cipher_suite, PER_WORKER)
+    job = (str(shared.store_root), shared.agent_id, shared.seed, shared.cipher_suite, PER_WORKER)
 
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
         minted = list(pool.map(_mint, [job] * WORKERS))
@@ -59,7 +60,7 @@ def test_key_package_store_when_minted_from_several_threads_stays_countable(make
 
 def test_key_package_store_when_minted_from_several_processes_stays_countable(make_agent):
     shared = make_agent("shared")
-    job = (str(shared.store_root), shared.seed, shared.cipher_suite, PER_WORKER)
+    job = (str(shared.store_root), shared.agent_id, shared.seed, shared.cipher_suite, PER_WORKER)
 
     with ProcessPoolExecutor(max_workers=WORKERS) as pool:
         minted = list(pool.map(_mint, [job] * WORKERS))
@@ -103,8 +104,14 @@ def test_group_state_when_two_clients_share_one_store_root_forks_rather_than_mer
 def test_seed_when_copied_into_rust_is_not_the_callers_buffer(make_agent):
     """The client keeps its own zeroizing copy — a caller may clear its own."""
     seed = bytearray(secrets.token_bytes(32))
-    client = rine_mls.MlsClient(str(make_agent("wipe").store_root), bytes(seed), DEFAULT_SUITE)
-    public_key = client.public_key()
+    client = rine_mls.MlsClient(
+        str(make_agent("wipe").store_root),
+        b"wipe",
+        bytes(seed),
+        rine_mls.AllowedIdentities(),
+        DEFAULT_SUITE,
+    )
+    leaf_public_key = client.leaf_public_key()
 
     seed[:] = bytes(32)
-    assert client.public_key() == public_key
+    assert client.leaf_public_key() == leaf_public_key

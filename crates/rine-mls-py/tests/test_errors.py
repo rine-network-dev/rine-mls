@@ -16,16 +16,26 @@ from conftest import DEFAULT_SUITE, code_of, group_id
 
 
 def test_open_when_the_arguments_are_wrong_names_which_argument(workspace):
-    seed = secrets.token_bytes(32)
+    agent_id, seed, allowed = b"agent", secrets.token_bytes(32), rine_mls.AllowedIdentities()
 
     with pytest.raises(rine_mls.UnsupportedCipherSuiteError):
-        rine_mls.MlsClient(str(workspace / "a"), seed, 0x1234)
+        rine_mls.MlsClient(str(workspace / "a"), agent_id, seed, allowed, 0x1234)
+
+    with pytest.raises(rine_mls.UnsupportedCipherSuiteError):
+        rine_mls.MlsClient(str(workspace / "a"), agent_id, seed, allowed, 0x0001)
 
     with pytest.raises(rine_mls.InvalidSigningSeedError):
-        rine_mls.MlsClient(str(workspace / "b"), secrets.token_bytes(16), DEFAULT_SUITE)
+        rine_mls.MlsClient(
+            str(workspace / "b"), agent_id, secrets.token_bytes(16), allowed, DEFAULT_SUITE
+        )
+
+    with pytest.raises(rine_mls.EmptyAgentIdError):
+        rine_mls.MlsClient(str(workspace / "b"), b"", seed, allowed, DEFAULT_SUITE)
 
     with pytest.raises(rine_mls.InvalidEpochRetentionError):
-        rine_mls.MlsClient(str(workspace / "c"), seed, DEFAULT_SUITE, epoch_retention_limit=0)
+        rine_mls.MlsClient(
+            str(workspace / "c"), agent_id, seed, allowed, DEFAULT_SUITE, epoch_retention_limit=0
+        )
 
 
 def test_open_when_epoch_retention_is_a_real_limit_is_accepted(make_agent):
@@ -46,16 +56,12 @@ def test_key_package_batch_when_over_the_cap_is_refused_not_truncated(make_agent
 def test_blobs_when_of_the_wrong_kind_or_suite_are_refused_by_name(make_agent):
     alice = make_agent("alice").open()
     bob = make_agent("bob").open()
-    classical = make_agent("classical", rine_mls.CIPHER_SUITE_CLASSICAL).open()
 
     group = alice.create_group(group_id())
     key_package = bob.generate_key_package()
 
     with pytest.raises(rine_mls.UnexpectedBlobError):
         alice.join_from_welcome(key_package)
-
-    with pytest.raises(rine_mls.CipherSuiteMismatchError):
-        group.add_member(classical.generate_key_package())
 
     # A bare RFC 9420 KeyPackage — what a pre-cutover client publishes.
     with pytest.raises(rine_mls.UnreadableKeyPackageError):
@@ -105,7 +111,13 @@ def test_store_failures_when_the_directory_is_unreadable_are_typed_as_store(work
     store_root = workspace / "locked"
     (store_root / "key_packages").mkdir(parents=True)
 
-    client = rine_mls.MlsClient(str(store_root), secrets.token_bytes(32), DEFAULT_SUITE)
+    client = rine_mls.MlsClient(
+        str(store_root),
+        b"locked",
+        secrets.token_bytes(32),
+        rine_mls.AllowedIdentities(),
+        DEFAULT_SUITE,
+    )
     client.generate_key_package()
 
     (store_root / "key_packages").chmod(0o000)
@@ -138,6 +150,10 @@ def test_exception_classes_when_inspected_share_one_base_and_distinct_codes(work
     # `except RineMlsError` catches everything, which is what a caller that only
     # wants to know "MLS said no" should be able to write.
     assert (
-        code_of(lambda: rine_mls.MlsClient(str(workspace / "x"), b"short", DEFAULT_SUITE))
+        code_of(
+            lambda: rine_mls.MlsClient(
+                str(workspace / "x"), b"x", b"short", rine_mls.AllowedIdentities(), DEFAULT_SUITE
+            )
+        )
         == "RINE_MLS_INVALID_SIGNING_SEED"
     )

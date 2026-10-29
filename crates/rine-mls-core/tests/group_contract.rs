@@ -30,7 +30,6 @@ const MLS_BLOB_MAX_B64: usize = 256 * 1024;
 #[test]
 fn test_default_cipher_suite_is_the_post_quantum_one() {
     assert_eq!(RineCipherSuite::DEFAULT, RineCipherSuite::XWing);
-    assert!(RineCipherSuite::DEFAULT.is_post_quantum());
     assert_eq!(RineCipherSuite::DEFAULT.id(), 0xF057);
 }
 
@@ -191,54 +190,6 @@ fn test_add_members_when_a_key_package_predates_the_cutover_names_the_member_to_
             "the second member is the one who has to republish, got {error:?}",
         );
     });
-}
-
-#[test]
-fn test_add_members_when_a_key_package_is_from_another_suite_is_refused_by_name() {
-    let alice = TestAgent::new(1, RineCipherSuite::XWing);
-    let bob = TestAgent::new(2, RineCipherSuite::Classical);
-
-    let (mut group, _) = alice.client.create_group(&group_id(0xB5)).expect("create");
-    let error = group
-        .add_member(
-            &bob.client
-                .generate_key_package()
-                .expect("classical package"),
-        )
-        .expect_err("a classical KeyPackage does not belong in a post-quantum group");
-
-    assert!(
-        matches!(
-            error,
-            RineMlsError::CipherSuiteMismatch {
-                expected: 0xF057,
-                got: 0x0001,
-            }
-        ),
-        "got {error:?}",
-    );
-}
-
-#[test]
-fn test_join_from_welcome_when_the_group_runs_another_suite_is_refused_by_name() {
-    let alice = TestAgent::new(1, RineCipherSuite::XWing);
-    let bob = TestAgent::new(2, RineCipherSuite::XWing);
-
-    let (mut group, _) = alice.client.create_group(&group_id(0xB6)).expect("create");
-    let bundle = group
-        .add_member(&bob.client.generate_key_package().expect("package"))
-        .expect("add bob");
-
-    let error = bob
-        .reopen_as(RineCipherSuite::Classical)
-        .join_from_welcome(&bundle.welcomes[0])
-        .map(|_| ())
-        .expect_err("a client built for another suite cannot join this group");
-
-    assert!(
-        matches!(error, RineMlsError::CipherSuiteMismatch { .. }),
-        "got {error:?}",
-    );
 }
 
 #[test]

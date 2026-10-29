@@ -1,6 +1,6 @@
 {
   "name": "@rine-network/mls",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "rine's MLS group core (RFC 9420) with the X-Wing post-quantum ciphersuite",
   "license": "Apache-2.0",
   "repository": {
@@ -32,12 +32,12 @@
     ]
   },
   "optionalDependencies": {
-    "@rine-network/mls-linux-x64-gnu": "0.1.1",
-    "@rine-network/mls-linux-arm64-gnu": "0.1.1",
-    "@rine-network/mls-linux-x64-musl": "0.1.1",
-    "@rine-network/mls-linux-arm64-musl": "0.1.1",
-    "@rine-network/mls-darwin-x64": "0.1.1",
-    "@rine-network/mls-darwin-arm64": "0.1.1"
+    "@rine-network/mls-linux-x64-gnu": "0.2.0",
+    "@rine-network/mls-linux-arm64-gnu": "0.2.0",
+    "@rine-network/mls-linux-x64-musl": "0.2.0",
+    "@rine-network/mls-linux-arm64-musl": "0.2.0",
+    "@rine-network/mls-darwin-x64": "0.2.0",
+    "@rine-network/mls-darwin-arm64": "0.2.0"
   },
   "scripts": {
     "build": "napi build --platform --release",

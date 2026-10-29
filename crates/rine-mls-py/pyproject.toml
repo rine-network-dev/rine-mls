@@ -40,6 +40,28 @@ features = ["pyo3/extension-module"]
 # `py.typed` marker — no `include` entry needed, and adding one would publish a
 # second copy. `tests/test_stub.py` keeps the stub honest.
 
+[tool.uv]
+# The version is dynamic (it comes from the workspace Cargo.toml) and the wheel is
+# compiled from Rust, but uv's default cache key for a source directory is
+# pyproject.toml alone. Without this list a path install (rine-sdk and fleet
+# resolve rine-mls from here) reuses a wheel built from older source and a venv
+# silently carries a previous release. Setting the list replaces the default, so
+# pyproject.toml is spelled out again. Paths are relative to this directory and
+# cover the binding, the core crate, the patched mls-rs, every manifest and the
+# lockfile.
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "Cargo.toml" },
+    { file = "rine_mls.pyi" },
+    { file = "src/**/*.rs" },
+    { file = "../rine-mls-core/Cargo.toml" },
+    { file = "../rine-mls-core/src/**/*.rs" },
+    { file = "../../Cargo.toml" },
+    { file = "../../Cargo.lock" },
+    { file = "../../vendor/**/Cargo.toml" },
+    { file = "../../vendor/**/*.rs" },
+]
+
 [tool.pytest.ini_options]
 # Declared so the crate's own tests root here rather than inheriting the
 # backend's pytest configuration from the repository root.

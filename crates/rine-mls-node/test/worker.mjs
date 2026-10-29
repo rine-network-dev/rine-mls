@@ -6,8 +6,16 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { mls } from "./helpers.mjs";
 
-const { job, storeRoot, seed, suite, groupId, count } = workerData;
-const client = mls.MlsClient.open(storeRoot, Buffer.from(seed), suite);
+const { job, storeRoot, agentId, seed, suite, groupId, count } = workerData;
+const allowed = new mls.AllowedIdentities();
+const client = mls.MlsClient.open(
+  storeRoot,
+  Buffer.from(agentId),
+  Buffer.from(seed),
+  allowed,
+  suite,
+);
+allowed.insert(client.agentId(), client.leafPublicKey(), 0);
 
 const jobs = {
   // Found a group and send one message — a whole MLS flow off the main thread.

@@ -16,6 +16,12 @@ set -euo pipefail
 crate_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$crate_dir"
 
+# Both builds below land their addon in the crate root; put back whatever was there.
+# shellcheck source=keep-addon.sh
+. "$crate_dir/test/keep-addon.sh"
+keep_addon
+trap restore_addon EXIT
+
 # This gate builds for the HOST, and this host's triple (x86_64-unknown-linux-gnu) is
 # ALSO one of the six cross-build targets. With a shared target/ the gate's cdylib lands
 # on top of the pinned builder's at target/x86_64-unknown-linux-gnu/release/, and the

@@ -1,16 +1,17 @@
 use napi::bindgen_prelude::Uint8Array;
 use napi_derive::napi;
 use rine_mls_core::{
-    AgentSigningKey, MlsStoreRoot, PanicGuard, RineCipherSuite, RineMlsClient, RineMlsError,
+    LeafIdentity, MlsStoreRoot, PanicGuard, RineCipherSuite, RineMlsClient, RineMlsError,
 };
 
+use crate::allowed::AllowedIdentities;
 use crate::error::{guard, MlsError};
 use crate::group::MlsGroup;
 use crate::options::MlsClientOptions;
 use crate::types::{into_arrays, to_vecs};
 
-/// One rine agent's MLS client, bound to that agent's Ed25519 identity and its
-/// own local state directory.
+/// One rine agent's MLS client, bound to that agent's leaf identity and its own
+/// local state directory.
 ///
 /// The identity seed is copied into Rust on open and the copy is zeroized when
 /// the client drops. The caller's `Uint8Array` belongs to the JS heap and cannot
@@ -26,21 +27,28 @@ use crate::types::{into_arrays, to_vecs};
 /// is safe under concurrent minting; group state is what is unprotected.)
 #[napi]
 pub struct MlsClient {
-    inner: RineMlsClient,
-    /// `pub(crate)` only so the `panic-probe` module can trip it deliberately.
+    /// `pub(crate)` for the sibling modules that add methods to this handle.
+    pub(crate) inner: RineMlsClient,
+    /// `pub(crate)` so a sibling module can trip it deliberately (the
+    /// `panic-probe` feature) or read what it recorded.
     pub(crate) poison: PanicGuard,
 }
 
 #[napi]
 impl MlsClient {
     /// `storeRoot` is this agent's private MLS directory (`keys/<agent>/mls2`),
-    /// `signingSeed` its 32-byte Ed25519 private key as rine stores it, and
-    /// `cipherSuite` the wire id the server persists as `mls_cipher_suite` —
-    /// `CIPHER_SUITE_DEFAULT` unless there is a reason to pin one.
+    /// `agentId` its MLS basic-credential identity, `leafSeed` its 32-byte
+    /// derived leaf signature seed (`mls.key`), and `cipherSuite` the wire id
+    /// the server persists as `mls_cipher_suite` — `CIPHER_SUITE_DEFAULT`
+    /// unless there is a reason to pin one. `allowed` is the chain-verified set
+    /// of `(agent id, leaf key)` pairs this client accepts as members; the
+    /// client's own pair must be in it.
     #[napi(factory)]
     pub fn open(
         store_root: String,
-        signing_seed: Uint8Array,
+        agent_id: Uint8Array,
+        leaf_seed: Uint8Array,
+        allowed: &AllowedIdentities,
         cipher_suite: u16,
         options: Option<MlsClientOptions>,
     ) -> Result<Self, MlsError> {
@@ -48,12 +56,13 @@ impl MlsClient {
         let inner = guard(&mut poison, || {
             let suite = RineCipherSuite::try_from(cipher_suite)
                 .map_err(|id| RineMlsError::UnsupportedCipherSuite { id })?;
-            let key = AgentSigningKey::from_seed(&signing_seed)?;
+            let identity = LeafIdentity::new(&agent_id, &leaf_seed)?;
             let options = options.unwrap_or_default().to_core()?;
 
             Ok(RineMlsClient::open_with(
                 MlsStoreRoot::new(store_root),
-                &key,
+                &identity,
+                allowed.inner.clone(),
                 suite,
                 options,
             ))
@@ -69,11 +78,19 @@ impl MlsClient {
         self.inner.cipher_suite().id()
     }
 
-    /// The agent's raw Ed25519 public key, which is also its MLS basic-credential
-    /// identity and the input to `MlsGroup.memberIndex`.
+    /// The agent id: its MLS basic-credential identity, and the value
+    /// `MlsGroup.memberIndex` looks members up by.
     #[napi]
-    pub fn public_key(&self) -> Uint8Array {
-        Uint8Array::new(self.inner.public_key().to_vec())
+    pub fn agent_id(&self) -> Uint8Array {
+        Uint8Array::new(self.inner.agent_id().to_vec())
+    }
+
+    /// The raw 32-byte Ed25519 leaf signature public key this client's
+    /// KeyPackages and commits are signed under — the `mls` field of the
+    /// agent's certificate.
+    #[napi]
+    pub fn leaf_public_key(&self) -> Uint8Array {
+        Uint8Array::new(self.inner.leaf_public_key().to_vec())
     }
 
     /// Mint one KeyPackage for `POST /agents/{id}/mls/key-packages`. Its private
@@ -164,7 +181,8 @@ impl MlsClient {
     /// nothing. An agent the tree **already** holds is refused by MLS — a
     /// second leaf carrying one identity is not a thing that can exist — so a
     /// member recovering from unusable local state wants
-    /// `resyncByExternalCommit` instead.
+    /// `resyncByExternalCommit` (with the stale handle) or
+    /// `resyncFromGroupInfo` (without one) instead.
     #[napi]
     pub fn join_by_external_commit(
         &mut self,
@@ -191,8 +209,8 @@ impl MlsClient {
     /// empty because an external commit adds nobody.
     ///
     /// It needs loadable stale state, because that is where the leaf index
-    /// comes from. An agent whose group state is gone entirely has no resync —
-    /// it has to be removed and re-invited.
+    /// comes from. An agent whose group state is gone entirely wants
+    /// `resyncFromGroupInfo` instead.
     #[napi]
     pub fn resync_by_external_commit(
         &mut self,
@@ -202,6 +220,33 @@ impl MlsClient {
         let inner = &self.inner;
         let (group, bundle) = guard(&mut self.poison, || {
             inner.resync_by_external_commit(&group_info, stale_leaf)
+        })?;
+
+        Ok(MlsGroup::new(group, Some(bundle)))
+    }
+
+    /// Rejoin a group this agent already holds a seat in when its local state is
+    /// gone, finding that seat in the GroupInfo's ratchet tree: an external
+    /// commit that removes the one leaf whose credential equals this agent's id
+    /// and adds a fresh leaf under the same credential and leaf key.
+    ///
+    /// It differs from `resyncByExternalCommit` only in where the leaf comes
+    /// from: that call needs the stale handle's `currentMemberIndex()`, this one
+    /// needs nothing but the GroupInfo. A tree with no leaf for this agent is
+    /// refused with `RINE_MLS_NO_SEAT_TO_REPLACE`, one with several with
+    /// `RINE_MLS_AMBIGUOUS_SEAT`, and a GroupInfo without a ratchet tree with
+    /// `RINE_MLS_GROUP_INFO_WITHOUT_TREE`.
+    ///
+    /// The new leaf must carry the same credential **and** leaf key as the one
+    /// it replaces; a resync that changes the key fails
+    /// `RINE_MLS_RESYNC_CHANGES_KEY`. An agent whose leaf key rotated moves its
+    /// seat with `MlsGroup.commitUpdate` instead. The resync epoch is escrowed
+    /// like any other.
+    #[napi]
+    pub fn resync_from_group_info(&mut self, group_info: Uint8Array) -> Result<MlsGroup, MlsError> {
+        let inner = &self.inner;
+        let (group, bundle) = guard(&mut self.poison, || {
+            inner.resync_from_group_info(&group_info)
         })?;
 
         Ok(MlsGroup::new(group, Some(bundle)))

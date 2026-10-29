@@ -2,8 +2,14 @@
 //! FFI bindings branch on is [`mod@code`].
 
 mod code;
+mod escrow;
+mod leaf;
+mod peer;
 
 pub use code::RineMlsErrorCode;
+pub use escrow::EscrowFault;
+pub use leaf::LeafUpdateFault;
+pub(crate) use peer::AgentLabel;
 
 use core::fmt;
 
@@ -37,8 +43,25 @@ impl fmt::Display for MlsBlobKind {
 
 #[derive(Debug, thiserror::Error)]
 pub enum RineMlsError {
+    /// An MLS failure other than a refused leaf. Converted by hand
+    /// (`peer.rs`) so that a leaf the allowed set refuses becomes
+    /// [`Self::PeerNotAdmitted`] instead.
     #[error(transparent)]
-    Mls(#[from] mls_rs::error::MlsError),
+    Mls(mls_rs::error::MlsError),
+
+    /// The allowed set refused a leaf in the input, and `agent_id` is the
+    /// credential identity that leaf carries. The id is chosen by whoever made
+    /// the leaf: a member for an Add or a path leaf, and the joiner itself for
+    /// an external commit, where only the leaf's own signature vouches for it
+    /// (the server can forge such a commit). So it is only a candidate: the
+    /// caller chain-verifies that agent, and the verification, not the id,
+    /// decides whether the set grows. A leaf that fails it stays refused. The
+    /// message shows the id only when it is a canonical agent UUID.
+    #[error(
+        "the input carries a leaf this member has not admitted: {}",
+        AgentLabel(agent_id)
+    )]
+    PeerNotAdmitted { agent_id: Vec<u8> },
 
     #[error(transparent)]
     Store(#[from] StoreError),
@@ -76,7 +99,8 @@ pub enum RineMlsError {
     UnreadableKeyPackage { index: usize },
 
     /// A blob minted for one ciphersuite arrived on a path operating in
-    /// another — a classical KeyPackage offered to a post-quantum group, or a
+    /// another — a stock classical KeyPackage (rine itself no longer mints one)
+    /// offered to a post-quantum group, or a
     /// Welcome for a group whose suite is not the one this client was opened
     /// with. Both ids are the wire values the rine server stores as
     /// `mls_cipher_suite`.
@@ -110,10 +134,15 @@ pub enum RineMlsError {
     )]
     InvalidEpochRetention,
 
-    #[error("Ed25519 signing seed must be 32 bytes, got {len}")]
+    #[error("Ed25519 leaf signing seed must be 32 bytes, got {len}")]
     InvalidSigningSeed { len: usize },
 
-    /// A ciphersuite id that is neither of rine's two. Raised by callers that
+    /// A client opened for an agent with no id: the basic credential would
+    /// carry an empty identity, which no allowed-set entry can name.
+    #[error("the agent id a client is opened with must not be empty")]
+    EmptyAgentId,
+
+    /// A ciphersuite id that is not rine's one. Raised by callers that
     /// take the suite as the wire integer the server stores (`mls_cipher_suite`)
     /// rather than as [`crate::RineCipherSuite`] — the FFI bindings, above all.
     #[error("unsupported MLS ciphersuite 0x{id:04X}")]
@@ -140,6 +169,48 @@ pub enum RineMlsError {
     /// covers everything the FFI bindings can raise.
     #[error(transparent)]
     MlKem(#[from] crate::mlkem::MlKemError),
+
+    /// An ML-DSA-65 key-generation seed of the wrong length ([`crate::mldsa`]).
+    #[error(transparent)]
+    MlDsa(#[from] crate::mldsa::SeedLengthError),
+
+    /// A per-epoch read escrow that cannot be encoded or does not read back.
+    #[error("invalid epoch read escrow: {0}")]
+    InvalidEscrow(#[from] EscrowFault),
+
+    /// An application message whose AEAD opened under the escrowed secrets but
+    /// whose MLS framing signature does not verify under the key the escrow
+    /// records for the leaf its sender data names. Every member refuses such a
+    /// message, so it is never the sender's text.
+    #[error("the framing signature of leaf {sender} generation {generation} does not verify")]
+    MemberRejected { sender: u32, generation: u32 },
+
+    /// An application message whose sender data names a generation too far
+    /// ahead of the sender's ratchet for the reader to reach. A group member
+    /// chose that number, so the reader refuses it rather than spend that many
+    /// key derivations.
+    #[error("generation {generation} is too far ahead of the sender's ratchet")]
+    GenerationTooFar { generation: u32 },
+
+    /// A resync from a GroupInfo whose tree holds no leaf with this agent's
+    /// credential: there is no seat to replace, and joining is a different call.
+    #[error("the group's ratchet tree holds no leaf with this agent's credential")]
+    NoSeatToReplace,
+
+    /// A GroupInfo whose tree holds several leaves with this agent's
+    /// credential. Removing one of them would silently pick which seat is the
+    /// agent's, so the resync refuses.
+    #[error("the group's ratchet tree holds {count} leaves with this agent's credential")]
+    AmbiguousSeat { count: usize },
+
+    /// A GroupInfo without the ratchet-tree extension, from which no seat can
+    /// be found.
+    #[error("the GroupInfo carries no ratchet tree")]
+    GroupInfoWithoutTree,
+
+    /// A self-update, a pending commit or a generation check refused.
+    #[error(transparent)]
+    LeafUpdate(#[from] LeafUpdateFault),
 }
 
 pub type Result<T> = core::result::Result<T, RineMlsError>;

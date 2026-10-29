@@ -1,34 +1,53 @@
 //! One rine agent's MLS client: what it is opened with, and what it holds.
 //! The group lifecycle is [`mod@groups`]; the KeyPackage pool is
-//! [`mod@key_packages`].
+//! [`mod@key_packages`]; resync without a handle is [`mod@resync`].
 
 mod groups;
 mod key_packages;
+mod resync;
+mod rules;
+
+pub use key_packages::key_package_signature_key;
+pub(crate) use rules::RineRulesError;
 
 use mls_rs::client_builder::{
-    BaseConfig, WithCryptoProvider, WithGroupStateStorage, WithIdentityProvider, WithKeyPackageRepo,
+    BaseConfig, WithCryptoProvider, WithGroupStateStorage, WithIdentityProvider,
+    WithKeyPackageRepo, WithMlsRules,
 };
-use mls_rs::identity::basic::BasicIdentityProvider;
-use mls_rs::mls_rules::{CommitOptions, DefaultMlsRules};
 use mls_rs::Client;
 
+use crate::allowed::{AllowedIdentities, AllowedSetIdentityProvider};
 use crate::crypto::RineCryptoProvider;
 use crate::group::RineMlsGroup;
-use crate::identity::AgentSigningKey;
+use crate::identity::LeafIdentity;
 use crate::policy::EpochRetention;
-use crate::store::{FileGroupStateStorage, FileKeyPackageStorage, MlsStoreRoot, SelfReadCache};
+use crate::store::{
+    FileGroupStateStorage, FileKeyPackageStorage, Incarnation, MlsStoreRoot, SelfReadCache,
+};
 use crate::suite::RineCipherSuite;
 
+use self::rules::RineMlsRules;
+
 /// The one mls-rs configuration rine uses: rine's crypto provider (pure Rust,
-/// portable across the whole platform matrix, classical and post-quantum
-/// suites), accept-all basic credentials, and file-backed local state.
-pub type RineMlsConfig = WithIdentityProvider<
-    BasicIdentityProvider,
-    WithCryptoProvider<
-        RineCryptoProvider,
-        WithGroupStateStorage<
-            FileGroupStateStorage,
-            WithKeyPackageRepo<FileKeyPackageStorage, BaseConfig>,
+/// portable across the whole platform matrix, post-quantum suite), basic
+/// credentials held to a caller-supplied allowed set, rine's commit rules, and
+/// file-backed local state.
+///
+/// The identity provider is named concretely on purpose: the vendored
+/// prior-epoch sender check (vendor/mls-rs-0.55.2/PATCH.md item 9) is safe only
+/// under a key-aware `valid_successor`. A credential-only provider would accept a
+/// leaf another identity reuses, so wiring a different provider means changing
+/// this type, and that change must revisit the patch first.
+pub type RineMlsConfig = WithMlsRules<
+    RineMlsRules,
+    WithIdentityProvider<
+        AllowedSetIdentityProvider,
+        WithCryptoProvider<
+            RineCryptoProvider,
+            WithGroupStateStorage<
+                FileGroupStateStorage,
+                WithKeyPackageRepo<FileKeyPackageStorage, BaseConfig>,
+            >,
         >,
     >,
 >;
@@ -44,13 +63,17 @@ pub struct RineMlsOptions {
     pub epoch_retention: EpochRetention,
 }
 
-/// One rine agent's MLS client, bound to that agent's Ed25519 identity key and
-/// its local state directory.
+/// One rine agent's MLS client, bound to that agent's leaf identity, the set of
+/// identities it accepts as members, and its local state directory.
 pub struct RineMlsClient {
     inner: Client<RineMlsConfig>,
     suite: RineCipherSuite,
-    identity: [u8; 32],
+    identity: LeafIdentity,
     root: MlsStoreRoot,
+    /// A clone of the group-state storage the client writes through. It shares
+    /// that storage's staging set, which is how a new group state is staged on
+    /// the very storage its group will save to.
+    group_state: FileGroupStateStorage,
     /// A second handle on the same directory the client writes through, for the
     /// inventory questions `KeyPackageStorage` has no method for.
     key_packages: FileKeyPackageStorage,
@@ -61,56 +84,39 @@ impl RineMlsClient {
     /// Open under rine's shipped policy.
     pub fn open(
         store_root: MlsStoreRoot,
-        signing_key: &AgentSigningKey,
+        identity: &LeafIdentity,
+        allowed: AllowedIdentities,
         suite: RineCipherSuite,
     ) -> Self {
-        Self::open_with(store_root, signing_key, suite, RineMlsOptions::default())
+        Self::open_with(
+            store_root,
+            identity,
+            allowed,
+            suite,
+            RineMlsOptions::default(),
+        )
     }
 
     pub fn open_with(
         store_root: MlsStoreRoot,
-        signing_key: &AgentSigningKey,
+        identity: &LeafIdentity,
+        allowed: AllowedIdentities,
         suite: RineCipherSuite,
         options: RineMlsOptions,
     ) -> Self {
-        // Three commit options rine's control plane depends on:
-        //
-        // - the ratchet tree rides in every commit and GroupInfo, because rine
-        //   has no out-of-band tree-sync channel, so a joiner's only source of
-        //   the tree is the extension inside what it is handed;
-        // - one Welcome per added member, never one shared Welcome, because
-        //   rine delivers Welcomes per agent (`welcomes: [{agent_id, welcome}]`)
-        //   and a shared one has no single recipient to address it to. MLS
-        //   defaults the other way, so this is set rather than assumed;
-        // - every commit carries an UpdatePath, always. MLS lets a commit that
-        //   only adds members skip the path, and then the committer's own leaf
-        //   keys and the path above it are unchanged across the epoch: the new
-        //   epoch's secrets are derived from key material a member who was
-        //   compromised before it already holds, so that epoch inherits the
-        //   compromise instead of healing it. Post-compromise security is a
-        //   property rine states about its groups, and it is only true if the
-        //   path is there on every commit, so this is not a knob.
-        let mls_rules = DefaultMlsRules::new().with_commit_options(
-            CommitOptions::new()
-                .with_ratchet_tree_extension(true)
-                .with_single_welcome_message(false)
-                .with_path_required(true),
-        );
-
         let key_packages = FileKeyPackageStorage::new(store_root.clone());
+        let group_state =
+            FileGroupStateStorage::with_retention(store_root.clone(), options.epoch_retention);
 
         let inner = Client::builder()
             .key_package_repo(key_packages.clone())
-            .group_state_storage(FileGroupStateStorage::with_retention(
-                store_root.clone(),
-                options.epoch_retention,
-            ))
-            .identity_provider(BasicIdentityProvider)
+            .group_state_storage(group_state.clone())
+            .identity_provider(AllowedSetIdentityProvider::new(allowed))
             .crypto_provider(RineCryptoProvider)
-            .mls_rules(mls_rules)
+            .mls_rules(RineMlsRules::new())
             .signing_identity(
-                signing_key.signing_identity(),
-                signing_key.signer(),
+                identity.signing_identity(),
+                identity.signer(),
                 suite.mls_rs(),
             )
             .build();
@@ -118,9 +124,10 @@ impl RineMlsClient {
         Self {
             inner,
             suite,
-            identity: signing_key.public_key(),
+            identity: identity.clone(),
             self_read: SelfReadCache::new(store_root.clone()),
             root: store_root,
+            group_state,
             key_packages,
         }
     }
@@ -129,13 +136,23 @@ impl RineMlsClient {
         self.suite
     }
 
-    /// The agent's raw Ed25519 public key: its MLS basic-credential identity,
-    /// and the value [`RineMlsGroup::member_index`] looks members up by.
-    pub fn public_key(&self) -> [u8; 32] {
-        self.identity
+    /// The agent id: its MLS basic-credential identity, and the value
+    /// [`RineMlsGroup::member_index`] looks members up by.
+    pub fn agent_id(&self) -> &[u8] {
+        self.identity.agent_id()
     }
 
-    fn group(&self, inner: mls_rs::Group<RineMlsConfig>) -> RineMlsGroup {
-        RineMlsGroup::new(inner, self.self_read.clone())
+    /// The raw Ed25519 leaf signature public key this client's KeyPackages and
+    /// commits are signed under.
+    pub fn leaf_public_key(&self) -> [u8; 32] {
+        self.identity.leaf_public_key()
+    }
+
+    fn group(
+        &self,
+        inner: mls_rs::Group<RineMlsConfig>,
+        incarnation: Option<Incarnation>,
+    ) -> RineMlsGroup {
+        RineMlsGroup::new(inner, self.self_read.clone(), incarnation)
     }
 }

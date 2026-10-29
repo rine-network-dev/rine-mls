@@ -1,11 +1,11 @@
 //! The value objects a group operation hands back.
 //!
-//! Both are frozen and copy-out: they own plain Rust buffers and expose them as
+//! All are frozen and copy-out: they own plain Rust buffers and expose them as
 //! `bytes`, so nothing a caller holds points into MLS state.
 
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use rine_mls_core::{wire_epoch, RineMlsError as CoreError};
+use rine_mls_core::{wire_epoch, MemberLeaf, RineMlsError as CoreError};
 
 /// Everything one commit produces. `welcomes` is one entry per member added by
 /// this commit, in add order, which is what `POST /groups/{id}/mls/commit`
@@ -62,13 +62,16 @@ impl AppMessage {
     }
 }
 
-/// One occupied leaf of the ratchet tree: where it sits, and whose it is.
-/// ``identity`` is the member's raw Ed25519 public key, the same value
-/// ``MlsClient.public_key()`` returns and ``MlsGroup.member_index`` takes.
+/// One occupied leaf of the ratchet tree: where it sits, whose it is, and the
+/// key it signs with. ``identity`` is the member's agent id bytes — its MLS
+/// basic-credential identity, the same value ``MlsClient.agent_id()`` returns
+/// and ``MlsGroup.member_index`` takes. ``signature_key`` is the raw 32-byte
+/// leaf signature key, the ``mls`` field of the agent's certificate.
 #[pyclass(frozen, module = "rine_mls")]
 pub struct MemberIdentity {
     pub(crate) index: u32,
     pub(crate) identity: Vec<u8>,
+    pub(crate) signature_key: Vec<u8>,
 }
 
 #[pymethods]
@@ -82,13 +85,56 @@ impl MemberIdentity {
     fn identity<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
         PyBytes::new(py, &self.identity)
     }
+
+    #[getter]
+    fn signature_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.signature_key)
+    }
 }
 
-/// Copy the core's `(index, identity)` pairs out to Python.
-pub(crate) fn convert_members(members: Vec<(u32, Vec<u8>)>) -> Vec<MemberIdentity> {
+/// An application message opened by an ``EpochReader``: the signed rine
+/// envelope, the leaf that sent it, the signature key it verified under, and the
+/// sender's ratchet generation.
+#[pyclass(frozen, module = "rine_mls")]
+pub struct OpenedMessage {
+    pub(crate) envelope: Vec<u8>,
+    pub(crate) sender_index: u32,
+    pub(crate) signer_public_key: Vec<u8>,
+    pub(crate) generation: u32,
+}
+
+#[pymethods]
+impl OpenedMessage {
+    #[getter]
+    fn envelope<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.envelope)
+    }
+
+    #[getter]
+    fn sender_index(&self) -> u32 {
+        self.sender_index
+    }
+
+    #[getter]
+    fn signer_public_key<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.signer_public_key)
+    }
+
+    #[getter]
+    fn generation(&self) -> u32 {
+        self.generation
+    }
+}
+
+/// Copy the core's leaves out to Python.
+pub(crate) fn convert_members(members: Vec<MemberLeaf>) -> Vec<MemberIdentity> {
     members
         .into_iter()
-        .map(|(index, identity)| MemberIdentity { index, identity })
+        .map(|leaf| MemberIdentity {
+            index: leaf.index,
+            identity: leaf.identity,
+            signature_key: leaf.signature_key,
+        })
         .collect()
 }
 

@@ -23,9 +23,18 @@ try {
     assert.ok(types.includes(symbol), `index.d.ts is missing ${symbol}`);
   }
 
+  // The reader class is API-present in the package, not just the build directory.
+  assert.equal(typeof mls.EpochReader, "function");
+  assert.equal(typeof mls.EpochReader.fromEscrow, "function");
+
   const suite = mls.CIPHER_SUITE_DEFAULT;
-  const alice = mls.MlsClient.open(join(store, "alice"), randomBytes(32), suite);
-  const bob = mls.MlsClient.open(join(store, "bob"), randomBytes(32), suite);
+  const allowed = new mls.AllowedIdentities();
+  const [alice, bob] = ["alice", "bob"].map((name) =>
+    mls.MlsClient.open(join(store, name), Buffer.from(name), randomBytes(32), allowed, suite),
+  );
+  for (const client of [alice, bob]) {
+    allowed.insert(client.agentId(), client.leafPublicKey(), 0);
+  }
 
   assert.equal(
     typeof alice.panicProbe,

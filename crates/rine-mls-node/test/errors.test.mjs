@@ -18,17 +18,30 @@ const SUITE = mls.CIPHER_SUITE_DEFAULT;
 test("test_open_when_the_arguments_are_wrong_names_which_argument", () => {
   const root = workspace();
   const seed = randomBytes(32);
+  const id = Buffer.from("agent");
+  const set = new mls.AllowedIdentities();
 
   assert.equal(
-    codeOf(() => mls.MlsClient.open(join(root, "a"), seed, 0x1234)),
+    codeOf(() => mls.MlsClient.open(join(root, "a"), id, seed, set, 0x1234)),
     "RINE_MLS_UNSUPPORTED_CIPHER_SUITE",
   );
   assert.equal(
-    codeOf(() => mls.MlsClient.open(join(root, "b"), randomBytes(16), SUITE)),
+    codeOf(() => mls.MlsClient.open(join(root, "a"), id, seed, set, 0x0001)),
+    "RINE_MLS_UNSUPPORTED_CIPHER_SUITE",
+    "the classical suite is refused",
+  );
+  assert.equal(
+    codeOf(() => mls.MlsClient.open(join(root, "b"), id, randomBytes(16), set, SUITE)),
     "RINE_MLS_INVALID_SIGNING_SEED",
   );
   assert.equal(
-    codeOf(() => mls.MlsClient.open(join(root, "c"), seed, SUITE, { epochRetentionLimit: 0 })),
+    codeOf(() => mls.MlsClient.open(join(root, "b"), Buffer.alloc(0), seed, set, SUITE)),
+    "RINE_MLS_EMPTY_AGENT_ID",
+  );
+  assert.equal(
+    codeOf(() =>
+      mls.MlsClient.open(join(root, "c"), id, seed, set, SUITE, { epochRetentionLimit: 0 }),
+    ),
     "RINE_MLS_INVALID_EPOCH_RETENTION",
     "keeping zero prior epochs is a broken group, not a tighter one",
   );
@@ -56,7 +69,6 @@ test("test_blobs_when_of_the_wrong_kind_or_suite_are_refused_by_name", () => {
   const root = workspace();
   const alice = agent(root, "alice", SUITE).open();
   const bob = agent(root, "bob", SUITE).open();
-  const classical = agent(root, "classical", mls.CIPHER_SUITE_CLASSICAL).open();
 
   const group = alice.createGroup(groupId());
   const keyPackage = bob.generateKeyPackage();
@@ -65,11 +77,6 @@ test("test_blobs_when_of_the_wrong_kind_or_suite_are_refused_by_name", () => {
     codeOf(() => alice.joinFromWelcome(keyPackage)),
     "RINE_MLS_UNEXPECTED_BLOB",
     "a KeyPackage offered where a Welcome belongs",
-  );
-  assert.equal(
-    codeOf(() => group.addMember(classical.generateKeyPackage())),
-    "RINE_MLS_CIPHER_SUITE_MISMATCH",
-    "a classical KeyPackage offered to a post-quantum group",
   );
   assert.equal(
     codeOf(() => group.addMember(keyPackage.slice(4))),
@@ -132,7 +139,13 @@ test("test_store_failures_when_the_directory_is_unreadable_are_typed_as_store", 
   const storeRoot = join(root, "locked");
   mkdirSync(join(storeRoot, "key_packages"), { recursive: true });
 
-  const client = mls.MlsClient.open(storeRoot, randomBytes(32), SUITE);
+  const client = mls.MlsClient.open(
+    storeRoot,
+    Buffer.from("locked"),
+    randomBytes(32),
+    new mls.AllowedIdentities(),
+    SUITE,
+  );
   client.generateKeyPackage();
 
   chmodSync(join(storeRoot, "key_packages"), 0o000);
@@ -146,10 +159,14 @@ test("test_store_failures_when_the_directory_is_unreadable_are_typed_as_store", 
 test("test_error_codes_when_collected_are_distinct_and_prefixed", () => {
   const root = workspace();
   const seed = randomBytes(32);
+  const id = Buffer.from("agent");
+  const set = new mls.AllowedIdentities();
   const codes = [
-    codeOf(() => mls.MlsClient.open(join(root, "x"), seed, 0x1234)),
-    codeOf(() => mls.MlsClient.open(join(root, "y"), randomBytes(1), SUITE)),
-    codeOf(() => mls.MlsClient.open(join(root, "z"), seed, SUITE, { epochRetentionLimit: 0 })),
+    codeOf(() => mls.MlsClient.open(join(root, "x"), id, seed, set, 0x1234)),
+    codeOf(() => mls.MlsClient.open(join(root, "y"), id, randomBytes(1), set, SUITE)),
+    codeOf(() =>
+      mls.MlsClient.open(join(root, "z"), id, seed, set, SUITE, { epochRetentionLimit: 0 }),
+    ),
   ];
 
   assert.equal(new Set(codes).size, codes.length, "one code per failure, not one code for all");

@@ -17,8 +17,10 @@
 
 use mls_rs::ExtensionList;
 
-use crate::error::{Result, RineMlsError};
+use crate::error::{MlsBlobKind, Result, RineMlsError};
 use crate::policy::{key_package_shortfall, KEY_PACKAGE_MAX_BATCH, KEY_PACKAGE_TARGET};
+use crate::suite::RineCipherSuite;
+use crate::wire;
 
 use super::RineMlsClient;
 
@@ -105,4 +107,46 @@ impl RineMlsClient {
 
         Ok(fresh)
     }
+
+    /// Give back the private half of the KeyPackage a Welcome was sealed to,
+    /// for a Welcome that left the caller's spool without being opened. The
+    /// local inventory then falls, and the ordinary top-up republishes.
+    ///
+    /// Returns `true` when exactly one of the Welcome's KeyPackageRefs names a
+    /// private half in this client's store, and deletes that half. Returns
+    /// `false`, deleting nothing, when none does or when more than one does: a
+    /// real Welcome names this agent once, so a forged one that names several
+    /// of its refs is refused. Idempotent: a second call finds nothing.
+    ///
+    /// Never call it for a Welcome that was installed — installing consumes the
+    /// half itself.
+    pub fn discard_welcome_key_package(&self, welcome: &[u8]) -> Result<bool> {
+        let message = wire::decode(welcome, MlsBlobKind::Welcome, self.suite)?;
+
+        let mut held = Vec::new();
+        for reference in message.welcome_key_package_references() {
+            if self.key_packages.holds(reference)? {
+                held.push(reference);
+            }
+        }
+
+        match held.as_slice() {
+            [only] => {
+                self.key_packages.remove(only)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+}
+
+/// The leaf signature key a KeyPackage carries, for the claim check. The
+/// KeyPackage's own signature is checked when an Add is built from it, not here.
+pub fn key_package_signature_key(key_package: &[u8]) -> Result<Vec<u8>> {
+    let message = wire::decode_key_package(key_package, 0, RineCipherSuite::DEFAULT)?;
+    let key_package = message
+        .into_key_package()
+        .ok_or(RineMlsError::UnreadableKeyPackage { index: 0 })?;
+
+    Ok(key_package.signing_identity().signature_key.to_vec())
 }

@@ -199,7 +199,7 @@ fn count(dir: &std::path::Path) -> usize {
 #[test]
 #[ignore = "plants a full retention window of epoch files to time a persist against it"]
 fn test_persist_when_the_window_is_full_stays_cheap() {
-    let suite = RineCipherSuite::Classical;
+    let suite = RineCipherSuite::XWing;
     let alice = TestAgent::new(1, suite);
     let id = group_id(0xB7);
 

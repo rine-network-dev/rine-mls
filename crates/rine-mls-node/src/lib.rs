@@ -43,21 +43,36 @@
 // which a reviewer can see.
 #![deny(unsafe_code)]
 
+mod allowed;
 mod client;
+mod epoch_reader;
 mod error;
 mod group;
+mod group_escrow;
+mod group_update;
+mod key_package_discard;
+mod key_package_key;
 mod options;
 #[cfg(feature = "panic-probe")]
 mod probe;
+mod refusal;
+mod seeded;
 mod types;
 
 use napi_derive::napi;
 use rine_mls_core::RineCipherSuite;
 
+pub use allowed::AllowedIdentities;
 pub use client::MlsClient;
+pub use epoch_reader::{EpochReader, OpenedMessage};
 pub use group::MlsGroup;
+pub use key_package_key::key_package_signature_key;
 pub use options::MlsClientOptions;
-pub use types::{AppMessage, CommitBundle, MemberIdentity};
+pub use seeded::{ml_dsa65_public_key_from_seed, ml_kem768_key_pair_from_seed, MlKemKeyPair};
+pub use types::{
+    AppMessage, CommitBundle, EpochFingerprint, EscrowBacklog, EscrowExport, EscrowGap,
+    EscrowGapReason, EscrowTake, MemberIdentity,
+};
 
 /// Which release this addon was compiled from, as a plain string in the binary.
 ///
@@ -77,17 +92,15 @@ pub use types::{AppMessage, CommitBundle, MemberIdentity};
 pub static RINE_MLS_BUILD_STAMP: &str = concat!("RINEMLS-BUILD/", env!("CARGO_PKG_VERSION"));
 
 /// The suite ids the server stores in `mls_cipher_suite`, read off the core
-/// rather than restated, so the two can never disagree.
-#[napi]
-pub const CIPHER_SUITE_CLASSICAL: u16 = RineCipherSuite::Classical.id();
-
+/// rather than restated, so the two can never disagree. X-Wing is the only
+/// suite rine speaks; the classical suite is refused with
+/// `RINE_MLS_UNSUPPORTED_CIPHER_SUITE`.
 #[napi]
 pub const CIPHER_SUITE_XWING: u16 = RineCipherSuite::XWing.id();
 
-/// The suite a NEW rine group is created with. Read this rather than choosing
-/// one of the two constants above: the default is decided once, in the core, so
-/// the TypeScript and Python stacks cannot drift into creating groups of
-/// different suites.
+/// The suite a NEW rine group is created with. Read this rather than choosing a
+/// constant above: the default is decided once, in the core, so the TypeScript
+/// and Python stacks cannot drift into creating groups of different suites.
 #[napi]
 pub const CIPHER_SUITE_DEFAULT: u16 = RineCipherSuite::DEFAULT.id();
 

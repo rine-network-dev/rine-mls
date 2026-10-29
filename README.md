@@ -5,12 +5,19 @@ rine surface, wrapping [mls-rs](https://github.com/awslabs/mls-rs).
 
 | Crate | Purpose |
 |---|---|
-| `crates/rine-mls-core` | rine's MLS contract: create, Welcome join, external-commit self-join, Add/Remove, application messages, epoch ordering, local file-backed state, and both ciphersuites |
+| `crates/rine-mls-core` | rine's MLS contract: create, Welcome join, external-commit self-join, Add/Remove, application messages, epoch ordering, local file-backed state, on the post-quantum X-Wing suite |
 | `crates/rine-mls-node` | napi-rs binding → npm `@rine-network/mls` |
 | `crates/rine-mls-py` | PyO3/maturin binding → PyPI `rine-mls` |
 
-The two bindings expose the same surface, method for method. They add exactly
-three things over the core and nothing else: typed, catchable errors (a
+The two bindings share the group surface: create, join, Add/Remove,
+application messages, key packages, escrow and the epoch reader
+(`EpochReader`). They differ on purpose in a few
+places. The Python binding also carries the full ML-KEM-768 surface (key generation, encapsulation, decapsulation),
+because the Python SDK has no other post-quantum implementation to use. The
+Node binding carries, beside the group surface and the epoch reader, only the two seeded
+derivations the TypeScript stack needs (`ml_kem768_key_pair_from_seed`,
+`ml_dsa65_public_key_from_seed`); the Python binding has both of those as well.
+Over the core, both add three things: typed, catchable errors (a
 JavaScript `Error.code`, a Python exception class, both spelling the same
 `RINE_MLS_*` code); a panic firewall, so no Rust unwind reaches V8 or CPython
 and a handle that panicked is retired rather than reused; and explicit byte
@@ -20,11 +27,12 @@ ownership, arguments copied in and results moved out.
 
 | Id | Suite | Notes |
 |---|---|---|
-| `0x0001` | X25519 · AES-128-GCM · SHA-256 · Ed25519 | RFC 9420's mandatory classical suite; rine's non-PQ fallback |
 | `0xF057` | X-Wing (X25519 + ML-KEM-768) · ChaCha20-Poly1305 · SHA-256 · Ed25519 | rine's post-quantum suite, at a private-use code point |
 
-The two suites differ only in the KEM: the AEAD, KDF, hash and signature scheme
-come unmodified from the providers mls-rs ships. The X-Wing KEM follows
+rine-mls is post-quantum only. RFC 9420's classical suite `0x0001` is not
+offered and is refused wherever a suite id is parsed. In the one suite, only the
+KEM is rine's own: the AEAD, KDF, hash and signature scheme come unmodified
+from the providers mls-rs ships. The X-Wing KEM follows
 `draft-connolly-cfrg-xwing-kem-06` over `libcrux-ml-kem` and `x25519-dalek`.
 
 Correctness is held down by three independent things, all run by `cargo test`:
@@ -37,7 +45,7 @@ Correctness is held down by three independent things, all run by `cargo test`:
 - `tests/kat/rine-suite-f057.txt` — the suite's primitives and HPKE key
   derivation, computed outside this crate.
 
-Every group-flow test runs on both suites.
+Every group-flow test runs on the X-Wing suite.
 
 ## Build and test
 
@@ -51,8 +59,7 @@ maturin build --release                                        # in crates/rine-
 ```
 
 The cross-language proof — a Node process and a Python process joining one
-group through a real rine server and exchanging application messages on both
-ciphersuites — is `spike/roundtrip/run.sh`. It boots its own throwaway postgres
+group through a real rine server and exchanging application messages — is `spike/roundtrip/run.sh`. It boots its own throwaway postgres
 and uvicorn on free ports.
 
 ```bash
@@ -140,8 +147,8 @@ time — not another measurement, not `ci.sh`.
 Two of the ten answer questions nothing else in the tree does, and are the ones
 to re-run first after a change to a batch size, a ciphersuite or the ratchet
 tree: `scale_founding`'s `A3` walks the live founding schedule at the group-size
-ceiling against real bytes, and `epoch_window` prices the epoch-retention window
-the server's own message retention is matched to.
+ceiling against real bytes, and `epoch_window` prices the client's epoch-retention
+window.
 
 ## Ground rules
 
@@ -155,7 +162,8 @@ the server's own message retention is matched to.
   packages published by either are unreadable to the other, so the switch is a
   cutover: pools are drained and republished, and groups are recreated.
 - Past epoch secrets are retained for a fixed window, derived once in
-  `policy/retention.rs` from the rine server's own 90-day message retention, so
-  a returning member reads any backlog the server can still hand it.
+  `policy/retention.rs` from a 90-day client-side reach, so a returning member
+  reads a backlog up to ninety days old. The number is the client's own budget
+  and does not depend on how long the server keeps messages.
   `RineMlsOptions::epoch_retention` trades that reach for a narrower window in
   which old secrets exist on disk.

@@ -1,7 +1,7 @@
 // Shared fixtures for the addon's tests.
 //
 // Everything here drives the addon exactly as `rine-core` will: real store
-// directories on disk, real Ed25519 seeds, real MLS blobs. The one thing left
+// directories on disk, real leaf signature seeds, real MLS blobs. The one thing left
 // out is the transport — base64url and HTTP belong above this layer.
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -14,11 +14,14 @@ const require = createRequire(import.meta.url);
 
 export const mls = require("../index.js");
 
-/** Both suites rine speaks, so no test only proves the classical path. */
-export const SUITES = [
-  ["classical", mls.CIPHER_SUITE_CLASSICAL],
-  ["post-quantum", mls.CIPHER_SUITE_XWING],
-];
+/** The one suite rine speaks. */
+export const SUITES = [["post-quantum", mls.CIPHER_SUITE_XWING]];
+
+/**
+ * Every agent a test opens is chain-verified by construction, so each one's
+ * (agent id, leaf key) pair goes into one process-wide set that all clients share.
+ */
+export const allowed = new mls.AllowedIdentities();
 
 const workspaces = [];
 
@@ -36,19 +39,25 @@ process.on("exit", () => {
 });
 
 /**
- * One agent: its own store root under `parent`, its own identity seed.
+ * One agent: its own store root under `parent`, agent id and leaf signature seed.
  * `open` takes the client fresh each time, which is how a restarted process
  * reaches its state.
  */
 export function agent(parent, name, cipherSuite, options) {
   const storeRoot = join(parent, name);
+  const agentId = randomBytes(16);
   const seed = randomBytes(32);
 
   return {
     name,
     storeRoot,
+    agentId,
     seed,
-    open: () => mls.MlsClient.open(storeRoot, seed, cipherSuite, options),
+    open: () => {
+      const client = mls.MlsClient.open(storeRoot, agentId, seed, allowed, cipherSuite, options);
+      allowed.insert(client.agentId(), client.leafPublicKey(), 0);
+      return client;
+    },
   };
 }
 

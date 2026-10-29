@@ -1,4 +1,4 @@
-//! Raw ML-KEM-768 for the Python SDK's `hpke-hybrid-v1` DM envelope.
+//! Raw ML-KEM-768 for the Python SDK's `hpke-hybrid-v2` DM envelope.
 //!
 //! The only part of this wheel that is not MLS. It is here so the Python SDK
 //! has the same post-quantum implementation the group path runs on rather than
@@ -7,7 +7,7 @@
 //! stack.
 //!
 //! Everything is bytes in, `bytes` out, copied at the boundary like the rest of
-//! this binding. The wire format the four functions feed — the envelope layout,
+//! this binding. The wire format these functions feed — the envelope layout,
 //! the HKDF combiner, the AAD — belongs to the SDK, not here.
 
 use pyo3::prelude::*;
@@ -21,6 +21,24 @@ use crate::error::from_core;
 #[pyfunction]
 fn ml_kem768_generate_key_pair(py: Python<'_>) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
     let (private_key, public_key) = mlkem::generate_key_pair().map_err(|e| from_core(e.into()))?;
+
+    Ok((
+        PyBytes::new(py, &public_key).unbind(),
+        PyBytes::new(py, private_key.as_slice()).unbind(),
+    ))
+}
+
+/// Derive the key pair the 64-byte ``d‖z`` seed generates, returned as
+/// `(public_key, private_key)` like ``ml_kem768_generate_key_pair``. The same
+/// seed always yields the same pair; this is the org-root tree's expansion, not
+/// a replacement for OS randomness.
+#[pyfunction]
+fn ml_kem768_key_pair_from_seed(
+    py: Python<'_>,
+    seed: &[u8],
+) -> PyResult<(Py<PyBytes>, Py<PyBytes>)> {
+    let (private_key, public_key) =
+        mlkem::key_pair_from_seed(seed).map_err(|e| from_core(e.into()))?;
 
     Ok((
         PyBytes::new(py, &public_key).unbind(),
@@ -68,7 +86,9 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ML_KEM768_PRIVATE_KEY_SIZE", mlkem::PRIVATE_KEY_SIZE)?;
     m.add("ML_KEM768_CIPHERTEXT_SIZE", mlkem::CIPHERTEXT_SIZE)?;
     m.add("ML_KEM768_SHARED_SECRET_SIZE", mlkem::SHARED_SECRET_SIZE)?;
+    m.add("ML_KEM768_SEED_SIZE", mlkem::KEYGEN_SEED_SIZE)?;
     m.add_function(wrap_pyfunction!(ml_kem768_generate_key_pair, m)?)?;
+    m.add_function(wrap_pyfunction!(ml_kem768_key_pair_from_seed, m)?)?;
     m.add_function(wrap_pyfunction!(ml_kem768_public_key, m)?)?;
     m.add_function(wrap_pyfunction!(ml_kem768_encapsulate, m)?)?;
     m.add_function(wrap_pyfunction!(ml_kem768_decapsulate, m)?)

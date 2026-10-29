@@ -82,7 +82,20 @@ def test_stub_when_compared_to_the_module_declares_every_public_name(stub):
     assert module_public() == stub_top_level(stub)
 
 
-@pytest.mark.parametrize("class_name", ["MlsClient", "MlsGroup", "CommitBundle", "AppMessage"])
+@pytest.mark.parametrize("class_name", [
+        "MlsClient",
+        "MlsGroup",
+        "CommitBundle",
+        "AppMessage",
+        "EscrowExport",
+        "EscrowGap",
+        "EscrowGapReason",
+        "EscrowTake",
+        "EscrowBacklog",
+        "OpenedMessage",
+        "AllowedIdentities",
+        "EpochReader",
+    ])
 def test_stub_when_compared_to_a_class_declares_every_public_member(stub, class_name):
     cls = getattr(rine_mls, class_name)
 
@@ -108,7 +121,13 @@ def test_stub_when_it_promises_code_on_the_base_every_raised_error_carries_one(s
     assert "code" in stub_members(stub, "RineMlsError")
 
     try:
-        rine_mls.MlsClient(str(workspace / "a"), b"too short", rine_mls.CIPHER_SUITE_DEFAULT)
+        rine_mls.MlsClient(
+            str(workspace / "a"),
+            b"agent",
+            b"too short",
+            rine_mls.AllowedIdentities(),
+            rine_mls.CIPHER_SUITE_DEFAULT,
+        )
         raise AssertionError("expected a typed refusal")
     except rine_mls.RineMlsError as e:
         assert e.code == "RINE_MLS_INVALID_SIGNING_SEED"

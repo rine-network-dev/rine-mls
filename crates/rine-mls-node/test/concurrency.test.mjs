@@ -37,6 +37,7 @@ test("test_addon_when_loaded_in_several_worker_threads_runs_mls_in_each", async 
     runWorker({
       job: "found",
       storeRoot: join(root, name),
+      agentId: [...randomBytes(16)],
       seed: [...randomBytes(32)],
       suite: SUITE,
       groupId: [...groupId()],
@@ -55,6 +56,7 @@ test("test_handle_when_sent_across_threads_arrives_without_its_state", async () 
   const result = await runWorker({
     job: "postHandle",
     storeRoot: join(root, "poster"),
+    agentId: [...randomBytes(16)],
     seed: [...randomBytes(32)],
     suite: SUITE,
   });
@@ -80,6 +82,7 @@ test("test_key_package_store_when_minted_from_several_threads_stays_countable", 
       runWorker({
         job: "mintKeyPackages",
         storeRoot: shared.storeRoot,
+        agentId: [...shared.agentId],
         seed: [...shared.seed],
         suite: SUITE,
         count: perThread,

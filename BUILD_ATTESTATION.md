@@ -1,4 +1,4 @@
-# rine-mls 0.1.1 — build attestation
+# rine-mls 0.2.0 — build attestation
 
 **This is a record of one machine's build, not a reproducibility claim.** Every digest
 below was read off the artifacts on the workstation that produced them. Nothing here has
@@ -9,15 +9,15 @@ from here. Regenerate it with `./scripts/attest-mls-artifacts.sh`; do not hand-e
 The artifacts themselves are gitignored — they are compiled binaries, and the registries
 receive them directly. This manifest is the part of them that lives in the repository.
 
-Generated: 2026-08-27T16:13:45Z
+Generated: 2026-10-25T14:36:06Z
 
 ## Source
 
 | | |
 |---|---|
-| Commit | `9d6565d1273aaa9a613195ecd7bdcc1ec3039aac` |
+| Commit | `01e9e50015f18ea81105c74b7b0e8e857a8fd9aa` |
 | Working tree (`rine-mls/`) | clean |
-| `rine-mls/Cargo.lock` SHA-256 | `9fbce6eb3ffdc950f0a313b435cafdaca312bb0a0937615d0c3bd7194d86974c` |
+| `rine-mls/Cargo.lock` SHA-256 | `d38e4b0fb81e7e868b26d1fcf3a048f45367c941643204639e4440f13ca9d57f` |
 
 Every build site passes `--locked`, so the dependency graph is the committed
 `Cargo.lock` and a resolver that wanted to move a dependency would have failed the build
@@ -57,23 +57,23 @@ SHA-256 over the exact files `./scripts/verify-mls-artifacts.sh` checks and
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `npm/linux-x64-gnu/rine-mls.linux-x64-gnu.node` | 2703936 | a826123f488fed69f0938fa154093370b09a6c94f3bb726323bc3d6f703f3a29 |
-| `npm/linux-arm64-gnu/rine-mls.linux-arm64-gnu.node` | 2128504 | 3a2b2cfbe4b4bf204fb7ed902784b8431addde0e9649a324a31f80e0e99fda8c |
-| `npm/linux-x64-musl/rine-mls.linux-x64-musl.node` | 2700400 | 7f841fe4c24c81be702471b03697120727b38efce3a101b211592b1fffec1c02 |
-| `npm/linux-arm64-musl/rine-mls.linux-arm64-musl.node` | 2123016 | be19b0c599a27769ed5cf6cf3607771e5b9e5cdb934f9a31e2d1b49ae4e2c728 |
-| `npm/darwin-x64/rine-mls.darwin-x64.node` | 5374312 | c56a36aa03be4509b993a2489f13c111d3842df571be7596a931b65b01cccfc8 |
-| `npm/darwin-arm64/rine-mls.darwin-arm64.node` | 4976304 | 86b22d9629901cb16cfec54eb5fbe53ac712e98a71381f04d43561439cda6272 |
+| `npm/linux-x64-gnu/rine-mls.linux-x64-gnu.node` | 3318192 | b61b5d349dfef581869f3fdf6e2c0099c847ce9eff805e702b70f65e5a70ef08 |
+| `npm/linux-arm64-gnu/rine-mls.linux-arm64-gnu.node` | 2493896 | 9685aabb943d9983bd676c53eb5409a7c3a723d314d9e88c66998e20c3ba4119 |
+| `npm/linux-x64-musl/rine-mls.linux-x64-musl.node` | 3314960 | c54e7c2de5ff7d54d84f5dcd5cf0194903736e67ef65b72acac690f726edfe0a |
+| `npm/linux-arm64-musl/rine-mls.linux-arm64-musl.node` | 2489720 | d7f2ad77b3e164a40becc65de75ec962e60e1e46b53f71fa61094f701836c97e |
+| `npm/darwin-x64/rine-mls.darwin-x64.node` | 6515608 | 1599c7c05ad6cd820da380ca5417cf1491ce5003463c46eb4a768d488df11c09 |
+| `npm/darwin-arm64/rine-mls.darwin-arm64.node` | 5939728 | 0b20c389a5c69a6a5cc50573d34b4747959789ac9694470229ede5fba3ea9386 |
 
 ### abi3 wheels — `dist-wheels/`
 
 | File | Bytes | SHA-256 |
 |---|---:|---|
-| `rine_mls-0.1.1-cp39-abi3-macosx_10_12_x86_64.whl` | 2012280 | b3dadb4305a0b98b521a87489c76e411616f5d73f21b08afa5967ce17b11a85e |
-| `rine_mls-0.1.1-cp39-abi3-macosx_11_0_arm64.whl` | 1885412 | b226e591ad66adc82f48e55b2917d1eb4ca31d3cb5f5917a4c867ba86b5dc812 |
-| `rine_mls-0.1.1-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl` | 988690 | 71f28761bf8f9dcd67b13fe588141b8e37137293ebcd71a8c1e6778b97e721a4 |
-| `rine_mls-0.1.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | 1097365 | 5561fc9176746a349018624a01948bbac4cd8181716ae29b4f9d2260285e7266 |
-| `rine_mls-0.1.1-cp39-abi3-musllinux_1_2_aarch64.whl` | 985527 | e93be50e70d011dab6c7913c957c33363d93d4c8456d5a80b2eb685ca42b398b |
-| `rine_mls-0.1.1-cp39-abi3-musllinux_1_2_x86_64.whl` | 1096168 | 9fad289b71f30d870724bf6df82eeabe69afb4b54bf49164f3a7c819c76a23e3 |
+| `rine_mls-0.2.0-cp39-abi3-macosx_10_12_x86_64.whl` | 2399334 | 1eb084ecc9a4c10b4760f8414fbf51f82c20613bccb312001e82dfce5764a123 |
+| `rine_mls-0.2.0-cp39-abi3-macosx_11_0_arm64.whl` | 2274751 | 2ba23f1c5a7c2976d47fc8808f55e76f2e8a5d624528d37a698fc367eb42da43 |
+| `rine_mls-0.2.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl` | 1174445 | 73bafccf0a5b1079ba529fedb1e2b574a3b3e8c32d51e8feca7d71f8941e268b |
+| `rine_mls-0.2.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` | 1322754 | 7e82a361d5a828107514dde8a571c7cffd7e8c6d791962ebb2c977df0cabed13 |
+| `rine_mls-0.2.0-cp39-abi3-musllinux_1_2_aarch64.whl` | 1171447 | 9a5ea2b56ce8c4277ea97a1c7984f1a690ca4b493ab1d70136d1bb931561298f |
+| `rine_mls-0.2.0-cp39-abi3-musllinux_1_2_x86_64.whl` | 1322257 | 965ad3e67f07fe64b0607ec24e5b820a7d9212c0d4babd3cc3bdc2b50d9039b8 |
 
 ## What has been checked against these bytes, and what has not
 
@@ -81,8 +81,8 @@ SHA-256 over the exact files `./scripts/verify-mls-artifacts.sh` checks and
   fingerprint, no panic-probe, on all twelve. It is a **string-presence** check: it
   cannot see a wrong signature, a panicking body or a broken ABI.
 - `./scripts/smoke-mls-platforms.sh` — **executes** the addon and the wheel, running the
-  bindings' own suites (a real create → add → send → decrypt round trip on both
-  ciphersuites) inside a container of the matching architecture and libc. It reaches
+  bindings' own suites (a real create → add → send → decrypt round trip on the one
+  ciphersuite) inside a container of the matching architecture and libc. It reaches
   four of the six platforms: `linux-x64-gnu` and `linux-x64-musl` natively,
   `linux-arm64-gnu` and `linux-arm64-musl` under qemu emulation.
 - **`darwin-x64` and `darwin-arm64` are executed by nothing.** No container on a Linux
